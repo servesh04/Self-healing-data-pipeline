@@ -112,8 +112,10 @@ browser, including a deliberately unauthenticated request that must be rejected 
 
 ### Running the container locally
 
+Build from the repository root, not from `backend/`:
+
 ```bash
-cd backend && docker build -t shp-backend:phase0 .
+docker build -f backend/Dockerfile -t shp-backend:phase0 .
 docker run --rm -p 8199:10000 -e PORT=10000 \
   -e DATABASE_URL="..." -e SHARED_TOKEN="..." \
   -e CORS_ORIGINS="http://localhost:5173" -e APP_ENV=container \
@@ -141,9 +143,16 @@ Backend on Render (Docker), frontend on Vercel, Postgres on Neon.
 **Render** — either apply [render.yaml](render.yaml) as a blueprint, or create a Docker web
 service manually with:
 
-- Dockerfile path `./backend/Dockerfile`, Docker context `./backend`
+- Dockerfile path `./backend/Dockerfile`
+- **Docker build context `.` (the repository root, which is Render's default) —
+  not `./backend`.** The Dockerfile's `COPY` paths are repo-relative, because from
+  Phase 1 the backend also needs `config/` and `data/`, which live outside `backend/`.
+  Pointing the context at `backend/` fails the build with `"/requirements.txt": not found`
+  and an exit code of 1.
 - Health check path `/health`
-- Env vars: `DATABASE_URL`, `SHARED_TOKEN`, `CORS_ORIGINS`, `APP_ENV=render`
+- Env vars: `DATABASE_URL`, `SHARED_TOKEN`, `CORS_ORIGINS`, `APP_ENV=render`.
+  A missing required variable stops the service with an explicit
+  `CONFIGURATION ERROR` block naming it, rather than a bare pydantic traceback.
 
 **Vercel** — import the repo and set **Root Directory to `frontend`** (the repo root is not the
 frontend). Framework preset Vite. Env vars `VITE_API_BASE_URL` (the Render URL, no trailing slash)

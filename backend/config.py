@@ -4,8 +4,10 @@ Phase 0 keeps this deliberately small: a database URL, one shared auth token,
 and the CORS allow-list. Nothing here knows about pipelines or graphs yet.
 """
 
+import sys
 from functools import lru_cache
 
+from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,7 +29,7 @@ class Settings(BaseSettings):
     # bare "http://a,http://b" would raise instead of splitting.
     cors_origins: str = "http://localhost:5173"
 
-    # Informational only in Phase 0 — recorded so /api/ping can report it.
+    # Informational only in Phase 0 — reported by /api/ping.
     app_env: str = "local"
 
     @property
@@ -35,6 +37,40 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
+def _report_and_exit(exc: ValidationError) -> None:
+    """Turn a config failure into something readable in a deploy log.
+
+    Raised bare, a missing variable surfaces on Render as a pydantic traceback
+    followed by an unexplained "exited with status 1". Name the variables.
+    """
+    missing = sorted(
+        {
+            str(err["loc"][0]).upper()
+            for err in exc.errors()
+            if err.get("type") == "missing" and err.get("loc")
+        }
+    )
+
+    bar = "=" * 68
+    lines = [bar, "CONFIGURATION ERROR - the service cannot start.", bar]
+    if missing:
+        lines.append("Missing required environment variable(s):")
+        lines.extend(f"  - {name}" for name in missing)
+        lines.append("")
+        lines.append("Set these in the Render dashboard (Environment tab),")
+        lines.append("or in a local .env file. See .env.example.")
+    else:
+        lines.append(str(exc))
+    lines.append(bar)
+
+    print("\n".join(["", *lines]), file=sys.stderr, flush=True)
+    raise SystemExit(1) from exc
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as exc:
+        _report_and_exit(exc)
+        raise  # unreachable; keeps the return type honest

@@ -11,7 +11,7 @@ services:
     plan: free
     region: ohio                     # same region as the Neon project (us-east-2)
     dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
+    dockerContext: .
     healthCheckPath: /health         # unauthenticated and DB-free by design
     envVars:
       - key: DATABASE_URL

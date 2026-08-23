@@ -1,0 +1,29 @@
+# Build context is the repository root (see backend/Dockerfile), so everything
+# not needed by the backend image is excluded here — otherwise the whole
+# frontend, venv and git history get uploaded to the builder on every deploy.
+.git/
+.gitignore
+
+# Secrets: never bake these into an image. Render injects env vars at runtime.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Frontend — deployed separately on Vercel, not part of the backend image
+frontend/
+node_modules/
+
+# Docs / artefacts
+docs/
+eval/results/
+*.md
+!README.md

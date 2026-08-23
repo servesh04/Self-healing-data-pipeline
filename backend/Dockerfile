@@ -9,12 +9,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# NOTE: the build context is the REPOSITORY ROOT, not backend/. That is
+# Render's dashboard default, and from Phase 1 the backend also needs config/
+# and data/ which live outside backend/. All COPY paths are repo-relative.
+#
 # Dependencies first so edits to source do not invalidate the wheel layer.
 # psycopg[binary] ships a bundled libpq, so no build toolchain is needed.
-COPY requirements.txt .
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Application code lands at /app so `uvicorn main:app` resolves.
+COPY backend/ ./
 
 # Render injects $PORT and it is not knowable at build time; shell form so it
 # expands at runtime. 8000 is the local fallback.
