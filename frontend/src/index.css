@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Dark theme is the project default (ARCHITECTURE.md → Dashboard). */
+:root {
+  color-scheme: dark;
+}

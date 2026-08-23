@@ -1,0 +1,17 @@
+# ── Phase 0: web + db only ──────────────────────────────────────────────
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.4
+pydantic-settings==2.15.0
+psycopg[binary,pool]==3.3.4
+python-multipart==0.0.32
+PyYAML==6.0.3
+
+# ── LangGraph: version recorded in Phase 0, imported from Phase 2 ───────
+langgraph==1.2.11
+langgraph-checkpoint==4.2.0
+langgraph-checkpoint-postgres==3.1.2
+
+# ── Data / contract layer: used from Phase 1 ────────────────────────────
+pandas==3.0.5
+pandera==0.32.1
