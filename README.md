@@ -18,7 +18,7 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 | **0** | Deployment skeleton — public frontend to public backend, bearer auth, Neon | **done — verified live at the deployed URLs** |
 | **1** | Pipeline + contract + fault datasets | **done** |
 | **2** | Graph skeleton with stub nodes | **done** |
-| **3** | Real nodes (LLM) | **deterministic half done and verified; LLM half written, blocked on `GROQ_API_KEY`** |
+| **3** | Real nodes (LLM) | **done — tuned and verified against a real model, all 6 fault datasets** |
 | 4 | Interrupt + Postgres checkpointer | not started |
 | 5 | Dashboard | not started |
 | 6 | Eval, docs, freeze | not started |
@@ -66,6 +66,7 @@ the pipeline now passes — proving the mapping is a real healing target, not ju
 | `day3_type_drift` | `revenue` as `"1,240.00"` strings | fails: `dtype('float64')` |
 | `day4_combo` | rename + type drift together | fails both signatures at once; passes with both patches applied together |
 | `day5_unfixable` | `region` abbreviated to `N/S/E/W` + new `currency` column | fails: `column_in_schema` (currency) + `isin(...)` (region) — confirmed **not** healable by any single mapping op, by design |
+| `day6_ambiguous_rename` | `customer_id` → `acct_ref` (added in Phase 3 — see below) | fails: `column_in_schema` / `column_in_dataframe`, same shape as day2; passes after `renames: {acct_ref: customer_id}` — the fault is identical in kind to day2, only the new column's name is deliberately non-obvious |
 
 ---
 
@@ -117,9 +118,9 @@ stands now.)
 
 ## Phase 3 — real nodes
 
-Split into a deterministic half (no LLM, fully verified against real data) and an LLM half
-(written and unit-verified against a mocked model, but not yet run against a real one —
-**blocked on `GROQ_API_KEY`**, which this repo has never had).
+Split into a deterministic half and an LLM half. Both are done and verified against a real
+model — a `GROQ_API_KEY` arrived partway through this phase; everything below the deterministic
+section was tuned and confirmed against `openai/gpt-oss-120b` on Groq, not mocked.
 
 ### Deterministic half — done, verified
 
@@ -156,12 +157,12 @@ Also confirmed the real graph — the actual `build_graph()`, mixing sync (`prof
 one) has `diagnose` fail cleanly on the missing key and the run escalate rather than crash —
 `nodes must never raise`, holding even under a real, not simulated, failure.
 
-### LLM half — written, unit-verified, not yet tuned
+### LLM half — done, tuned and verified against a real model
 
 `backend/services/llm.py` (Groq, `openai/gpt-oss-120b`, JSON mode, retry with backoff on
 `RateLimitError`), `backend/prompts/prompts.py`, and the real `diagnose` / `spec_rename` /
-`spec_type` / `spec_nullability` / `propose_patch` nodes are written. Every LLM node validates its
-parsed JSON against a Pydantic model in `backend/graph/schemas.py` before returning — required
+`spec_type` / `spec_nullability` / `propose_patch` nodes. Every LLM node validates its parsed
+JSON against a Pydantic model in `backend/graph/schemas.py` before returning — required
 regardless of JSON mode, which guarantees syntax, not schema.
 
 **Specialist scope leakage** — each specialist's raw output is validated against its *own*
@@ -172,20 +173,48 @@ optional, so a rename specialist that also emits a stray `casts` key would pass 
 silently and just look like a small, unrelated, harmless patch fragment — exactly the failure mode
 that's expensive to debug later. `propose_patch` gets the same protection in the other direction:
 its own model validates only `{"rationale": ...}`, so if it tries to invent its own patch content
-instead of describing the specialist's, that's also caught immediately.
-
-Verified with the LLM call mocked (10 cases: valid responses, a missing field, an out-of-range
+instead of describing the specialist's, that's also caught immediately. Confirmed with the LLM
+call mocked before a real key existed (10 cases: valid responses, a missing field, an out-of-range
 confidence, a leaked `casts` key from the rename specialist, an unknown cast op name, a leaked
-`patch` key from `propose_patch`) — every malformed/leaked case is caught and handled per the
-"nodes must never raise" guardrail, without ever reaching a real model. This is plumbing
-verification, not prompt tuning; it cannot substitute for the latter.
+`patch` key from `propose_patch`) — every case caught and handled without raising.
 
-**What genuinely requires the API key and has not been done**: running `diagnose` against real
-`day2`/`day3`/`day5` data to see what confidence it actually produces, and tuning
-`prompts.py`'s `DIAGNOSE_SYSTEM` against that — the entire escalation story depends on `day5`
-coming back low-confidence *and* `day2`/`day3` staying high-confidence, and neither can be
-verified without a real model. Also unverified: whether the real (not rule-based) diagnose +
-specialists converge `day4_combo` in exactly 2 attempts against the real prompts.
+**A day5/day6 split, not one dataset.** The original single ambiguous-case dataset conflated two
+different questions diagnose has to answer separately: *is there a viable class of fix at all*,
+and *how much do I trust my specific guess*. `day5_unfixable` (two unrelated, non-mechanical
+drifts) answers the first one "no" — `drift_class="unknown"`, which routes straight to
+`escalate` with no patch proposed at all. `day6_ambiguous_rename` (a real rename, but to a
+non-obvious column name) answers the first one "yes, rename" and the second one "not confidently"
+— it routes through a specialist to `human_approval` with a real patch to review. Conflating them
+into one dataset either auto-applies a wrong guess or escalates a case a human could have quickly
+approved; see `prompts.py`'s `DIAGNOSE_SYSTEM` and ARCHITECTURE.md's Fault Datasets section for
+the full reasoning (found empirically, mid-build, and corrected in both places).
+
+**A genuine model quirk, found and fixed.** `openai/gpt-oss-120b` on Groq reliably (not
+occasionally) wraps its JSON response as a list of 1-2 near-duplicate candidate objects instead
+of one top-level object — confirmed not a leaked reasoning trace (`reasoning_format="hidden"`
+made no difference) and not a temperature artifact (temperature 0 made it *worse*, 5/8 vs 7/8
+correct — this model's serving isn't fully deterministic even at temperature 0). An explicit
+"respond with exactly one JSON object, never a list" instruction in every system prompt fixed it
+outright; `graph/schemas.py:normalize_llm_json` remains as a defensive backstop (diagnose breaks
+ties on the lowest confidence among candidates — consistent with "prefer low confidence when
+uncertain" — other nodes take the first valid one, having no confidence field to compare).
+
+**Calibration, verified against the real model, 25/25 across a repeatability sweep** (5 runs
+each for day2/3/5/6, 10 for day4 — day4 needed a worked example added to the prompt after an
+initial 7/8, since abstract rules alone under-generalized to "two drift items present" reading
+as automatically ambiguous):
+
+| Dataset | drift_class | confidence | Result |
+|---|---|---|---|
+| `day2_renamed` | rename | 0.92-0.96 | auto-heals, 1 attempt |
+| `day3_type_drift` | type | 0.90-0.92 | auto-heals, 1 attempt |
+| `day4_combo` | rename, then type | 0.90-0.93 each | auto-heals, **exactly 2 attempts** |
+| `day5_unfixable` | unknown | 0.2 | escalates directly, no patch proposed |
+| `day6_ambiguous_rename` | rename | 0.3 | halts at `human_approval` with a real, **correct** patch (`{renames: {acct_ref: customer_id}}`); approving it heals in 1 attempt; rejecting it escalates with `heal_attempts` still 0 |
+
+All five confirmed via the real, complete `build_graph()` — no rule-based stand-in, no mocked
+LLM call — including `day6`'s full interrupt → real patch review → `Command(resume="approve")`
+→ heal round trip, and its reject counterpart.
 
 ---
 

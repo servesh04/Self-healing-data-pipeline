@@ -56,7 +56,7 @@ the interrupt exist because the problem demands them, not because a rubric rewar
 | Checkpointing / persistence | Postgres checkpointer. Resume-after-approval **requires** it |
 | Live state | Dashboard polls run state; graph nodes animate as they execute |
 | Guardrails | Bounded heal attempts, confidence gate, escalation path |
-| Measurable outcome | Eval: healed / correctly-escalated / missed across 5 injected faults |
+| Measurable outcome | Eval: healed / correctly-escalated / missed across 6 injected faults |
 
 > **Anti-pattern warning:** a fan-out/fan-in pipeline (N agents, one pass, concatenated
 > results) scores poorly — it is reproducible with `asyncio.gather`. Every cycle and branch
@@ -158,7 +158,8 @@ self-healing-pipeline/
 │   ├── day2_renamed.csv
 │   ├── day3_type_drift.csv
 │   ├── day4_combo.csv
-│   └── day5_unfixable.csv
+│   ├── day5_unfixable.csv
+│   └── day6_ambiguous_rename.csv
 │
 ├── eval/
 │   ├── run_eval.py
@@ -227,16 +228,29 @@ break in interesting ways.
 Write them yourself so you know exactly what fails and how. Do not hunt for broken data in the
 wild; that makes the demo a gamble. 40–60 rows each.
 
+Six datasets, not five — `day6_ambiguous_rename` was added after building Phase 3 and finding
+that this section's original claim for `day5` ("Ambiguous → low confidence → human interrupt")
+contradicted `route_after_diagnose`'s own routing table (Routing Functions, below), which sends
+an `"unknown"` classification straight to `escalate`, bypassing `human_approval` entirely. That
+routing is correct and unchanged; `day5`'s row here was wrong, not the code. `human_approval`
+needed a fault where diagnose is confident about *which class* of fix applies but not confident
+in the *specific* patch it would propose — day5's fault (two unrelated, non-mechanical problems)
+isn't that; day6's is. See `diagnose`'s node spec below for how the prompt treats "is there a
+class" and "how confident am I" as two separate questions rather than one conflated judgement.
+
 | File | Injected fault | Expected behaviour |
 |---|---|---|
 | `day1_clean.csv` | none — control | Passes first run. No healing triggered |
 | `day2_renamed.csv` | `customer_id` → `cust_id` | Rename specialist, high confidence, **auto-heals** |
 | `day3_type_drift.csv` | `revenue` as `"1,240.00"` strings | Type specialist, high confidence, auto-heals |
 | `day4_combo.csv` | rename **and** type drift together | Two heal iterations — **proves the cycle** |
-| `day5_unfixable.csv` | `region` values become `["N","S","E","W"]` **and** a new `currency` column appears | Ambiguous → low confidence → **human interrupt** |
+| `day5_unfixable.csv` | `region` values become `["N","S","E","W"]` **and** a new `currency` column appears | Two unrelated, non-mechanical drifts → `"unknown"`, low confidence → **routes straight to `escalate`, no patch proposed** |
+| `day6_ambiguous_rename.csv` | `customer_id` → `acct_ref` (same shape as day2, but the new name is not an obvious abbreviation of the old one) | Rename-shaped drift, so the *class* is confident — but the *specific* mapping isn't obvious enough to trust unattended → rename, low confidence → **human interrupt**, with a real patch to review |
 
-`day4` and `day5` are the demo. `day4` proves the loop iterates; `day5` proves the agent knows
-when to stop and ask. **Build these two first if time compresses.**
+`day4` and `day6` are the demo. `day4` proves the loop iterates; `day6` proves the agent knows
+when to ask rather than guess, and that its guess is worth reviewing once it does. `day5` proves
+the agent recognizes a genuinely unfixable case and says so directly, without pretending a patch
+review would have helped. **Build these three first if time compresses.**
 
 ---
 
@@ -427,14 +441,32 @@ rather than inventing them.
 **In:** `drift_items`, `assertion_failures`, sample values
 **Out:** `drift_class`, `diagnosis` (1–2 sentences), `confidence` (0.0–1.0)
 
-Prompt rules:
-- Exactly one column disappeared and one unfamiliar column appeared, matching dtype and
-  similar values → `rename`, high confidence
-- A column's dtype changed but values are recoverable (`"1,240.00"` → float) → `type`, high
-- Multiple unrelated drifts, an ambiguous mapping, or a semantic change in allowed values →
-  `unknown`, **low confidence**
-- **Explicitly instruct: when uncertain, output low confidence.** A wrongly auto-applied patch
-  is far worse than an unnecessary escalation. Put that sentence in the prompt.
+`drift_class` and `confidence` are two SEPARATE questions, not one conflated judgement — found
+by actually running this against `day6_ambiguous_rename`. Conflating them either auto-applies a
+wrong guess or escalates a case a human could have quickly approved:
+
+- **Question 1 — is there a viable class of fix at all**, based on the *shape* of the drift,
+  regardless of how sure the model is about the specifics: one missing column + one unexpected
+  column with matching dtype → `rename`-shaped, no matter what the new column is actually
+  called. A dtype mismatch recoverable by an obvious mechanical transform (`"1,240.00"` → float)
+  → `type`-shaped. Anything that doesn't fit one of the three shapes — an unpaired unexpected
+  column, a semantic change in allowed values, more than one independent problem where none
+  individually fits a shape — → `unknown`. `unknown` requires that *no* drift item matches a
+  shape; it is not triggered merely by having more than one drift item (`day4_combo` has two
+  drift items and is still confidently `rename` on the first pass).
+- **Question 2 — given the class, how much to trust the specific guess.** High confidence means
+  the specific mapping is obvious (`"cust_id"` for `"customer_id"` — a human glancing at both
+  names would agree immediately). Low confidence means the class is right but the guess deserves
+  a second look (`"acct_ref"` for `"customer_id"` — plausible, not obvious). **Explicitly
+  instruct: when the specific guess is uncertain, output low confidence rather than withholding
+  the guess** — a human reviews it either way; a wrongly auto-applied patch is far worse than an
+  unnecessary human review, but an empty proposal gives that human nothing to review. Put that
+  sentence in the prompt.
+
+`unknown` always routes straight to `escalate` (see `route_after_diagnose`) — there is no
+specialist for it, so there is nothing to propose and nothing for a human to approve or reject.
+Low-confidence `rename`/`type`/`nullability` is what reaches `human_approval`, with a real patch
+attached.
 
 ### `spec_rename` / `spec_type` / `spec_nullability` — LLM specialists
 Each receives only the drift items for its class and proposes a **narrow** fix. They differ by
@@ -513,9 +545,10 @@ it must survive the user going to lunch.
 6. Backend resumes the graph from the checkpoint with the human's decision
 7. Execution continues **from `human_approval`, not from START**
 
-**Verify explicitly:** trigger `day5_unfixable`, wait for the interrupt, **restart the backend
-process**, then approve. It must resume correctly. If it restarts from the beginning, the
-checkpointer is misconfigured. Test this before building any UI.
+**Verify explicitly:** trigger `day6_ambiguous_rename` (not `day5` — see the Fault Datasets
+section; `day5` escalates directly and never reaches `human_approval`), wait for the interrupt,
+**restart the backend process**, then approve. It must resume correctly. If it restarts from the
+beginning, the checkpointer is misconfigured. Test this before building any UI.
 
 `thread_id` must equal `run_id` and be stable across requests. Getting this wrong is the single
 most likely point of failure in the project.
@@ -601,10 +634,12 @@ the initial seed. Easy to get wrong, and it will look like the agent "forgetting
 
 ## Eval
 
-`eval/run_eval.py` runs all 5 fault datasets, twice:
+`eval/run_eval.py` runs all 6 fault datasets, twice:
 - **Baseline:** healing disabled — pipeline runs once, reports pass/fail
 - **Full graph:** healing enabled, auto-approving low-confidence patches for the automated run
-  (note this deviation in the README — the interrupt is verified manually)
+  (note this deviation in the README — the interrupt is verified manually). This only affects
+  `day6`: `day5` never reaches `human_approval` at all (see Fault Datasets), so there is no
+  patch for the automated run to auto-approve there.
 
 Output into `docs/eval_summary.md`:
 
@@ -614,10 +649,12 @@ Output into `docs/eval_summary.md`:
 | day2_renamed | rename | **fail** | pass | 1 | auto-healed |
 | day3_type_drift | type | **fail** | pass | 1 | auto-healed |
 | day4_combo | rename + type | **fail** | pass | 2 | auto-healed |
-| day5_unfixable | ambiguous | **fail** | — | 1 | **correctly escalated** |
+| day5_unfixable | two unrelated drifts | **fail** | **fail** | 0 | **correctly escalated, no patch proposed** |
+| day6_ambiguous_rename | ambiguous rename | **fail** | pass | 1 | low-confidence, auto-approved for eval, healed |
 
-Headline: *"4 of 5 injected faults resolved without human intervention; the fifth was correctly
-escalated rather than mis-patched. The baseline pipeline failed on all 4 drift cases."*
+Headline: *"4 of 6 injected faults resolved fully unattended; a 5th was correctly identified,
+proposed a real patch, and healed once approved; the 6th was correctly escalated with no patch
+proposed at all, rather than mis-patched. The baseline pipeline failed on all 5 drift cases."*
 
 **The escalation is a success, not a failure.** Frame it that way — an agent that knows its
 limits is the point.
@@ -655,7 +692,7 @@ Add `time.sleep(4)` between eval cases; the Groq free tier will throttle an unpa
 1. `contract.yaml` and the Pandera schema builder
 2. Mapping storage in Postgres + `runner.py` (load → apply_mapping → transform → validate)
 3. Structured validation result — never raise out of the runner
-4. **Author all 5 fault datasets.** Do this while fresh, not at 2am
+4. **Author all 6 fault datasets.** Do this while fresh, not at 2am
 5. Manually verify: `day1` passes; `day2`–`day5` each fail with the *expected* assertion error
 
 **Definition of Done**
@@ -696,7 +733,9 @@ fires. Stub one path with `confidence=0.3` to reach `human_approval`.
 - [ ] `day2_renamed` auto-heals in 1 attempt
 - [ ] `day3_type_drift` auto-heals in 1 attempt
 - [ ] `day4_combo` heals in exactly 2 attempts — **the cycle proven on real data**
-- [ ] `day5_unfixable` produces low confidence and routes toward `human_approval`
+- [ ] `day5_unfixable` produces low confidence (class `unknown`) and routes directly to `escalate`
+- [ ] `day6_ambiguous_rename` produces the right class at low confidence and routes toward
+      `human_approval` with a real, correct patch proposed
 
 ---
 
@@ -746,7 +785,7 @@ fires. Stub one path with `confidence=0.3` to reach `human_approval`.
 - Two drift classes auto-healed; nullability specialist is partial
 - Patches config, not transform code — a deliberate safety boundary
 - Polling, not streaming transport
-- 5 hand-authored faults, not a standard benchmark
+- 6 hand-authored faults, not a standard benchmark
 - Render free-tier cold starts
 
 ---
@@ -800,7 +839,7 @@ Rules:
 | `thread_id` unstable → resume restarts from START | Set `thread_id = run_id`; test with a process restart in Phase 4 |
 | Ephemeral filesystem loses mapping edits | Store mapping in Postgres from Phase 1 |
 | `history` overwrites instead of appends | `Annotated[..., operator.add]`; verify in Phase 2 |
-| `diagnose` over-confident on ambiguous drift | Prompt explicitly rewards low confidence; tune against `day5` |
+| `diagnose` over-confident on ambiguous drift | Prompt explicitly rewards low confidence; tune against `day5` (no class) and `day6` (right class, unsure guess) — they are different failure modes and need separate prompt handling, not one |
 | Render cold start kills the live demo | Warm it beforehand, or one month of Starter |
 | LangGraph import paths differ from this doc | Verify against the installed version in Phase 0 |
 
@@ -813,11 +852,15 @@ Rules:
    proposes `{cust_id: customer_id}`, auto-applies, reruns, **assertion bars flip red → green**.
 3. Run `day4_combo` — **the money shot.** Two heal iterations, the `↺ Heal attempt 2` badge
    fires, cycle visible in GraphCanvas.
-4. Run `day5_unfixable` — agent reports low confidence and halts. Show the patch diff and
-   rationale. **Restart the backend.** Then approve. It resumes mid-graph.
-5. Show `docs/eval_summary.md`.
+4. Run `day6_ambiguous_rename` — agent correctly identifies a rename but is unsure of the
+   specific mapping, halts with a real patch diff and rationale to review. **Restart the
+   backend.** Then approve. It resumes mid-graph, not from START.
+5. Run `day5_unfixable` — agent reports two unrelated, non-mechanical drifts and escalates
+   *directly*, with no patch proposed — the correct-escalation moment, distinct from step 4's
+   correct-review moment. There is nothing to approve here; that absence is the point.
+6. Show `docs/eval_summary.md`.
 
-Steps 3 and 4 are the project. If time runs short, cut 1 and 5 — never 3 or 4.
+Steps 3 and 4 are the project. If time runs short, cut 1 and 6 — never 3, 4, or 5.
 
 ---
 

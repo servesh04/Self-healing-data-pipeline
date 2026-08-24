@@ -7,6 +7,11 @@ sees it. This is where specialist scope leakage is actually caught: if the
 model emits a stray "casts" key alongside "renames", validation fails right
 here, by name, rather than three nodes later where it would just look like a
 small unrelated patch fragment quietly riding along.
+
+Also normalizes via normalize_llm_json (see graph/schemas.py) — the model
+has been observed to sometimes wrap its answer as a list of candidates
+rather than one object; unlike diagnose, there's no confidence field to
+break ties on here, so the first candidate that validates wins.
 """
 
 import json
@@ -14,7 +19,7 @@ import logging
 
 from pydantic import ValidationError
 
-from graph.schemas import RenameSpecialistOutput
+from graph.schemas import RenameSpecialistOutput, normalize_llm_json
 from prompts.prompts import SPEC_RENAME_SYSTEM, SPEC_RENAME_USER_TEMPLATE
 from services.llm import LLMError, call_json
 
@@ -30,9 +35,15 @@ async def spec_rename(state: dict) -> dict:
 
     try:
         raw = await call_json(SPEC_RENAME_SYSTEM, user_prompt)
-        parsed = RenameSpecialistOutput.model_validate(raw)
-    except (LLMError, ValidationError) as exc:
-        log.warning("spec_rename: failed or emitted an invalid/out-of-scope patch: %s", exc)
+    except LLMError as exc:
+        log.warning("spec_rename: LLM call failed: %s", exc)
         return {"specialist_output": {}}
 
-    return {"specialist_output": parsed.model_dump()}
+    for candidate in normalize_llm_json(raw):
+        try:
+            parsed = RenameSpecialistOutput.model_validate(candidate)
+            return {"specialist_output": parsed.model_dump()}
+        except ValidationError as exc:
+            log.warning("spec_rename: candidate failed validation (invalid or out-of-scope): %s", exc)
+
+    return {"specialist_output": {}}

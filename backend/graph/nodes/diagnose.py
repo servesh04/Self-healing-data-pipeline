@@ -13,11 +13,17 @@ import logging
 
 from pydantic import ValidationError
 
-from graph.schemas import DiagnoseOutput
+from graph.schemas import DiagnoseOutput, normalize_llm_json
 from prompts.prompts import DIAGNOSE_SYSTEM, DIAGNOSE_USER_TEMPLATE
 from services.llm import LLMError, call_json
 
 log = logging.getLogger(__name__)
+
+_DEFAULT_UNKNOWN = {
+    "drift_class": "unknown",
+    "diagnosis": "diagnose returned no valid classification -- escalating rather than guessing",
+    "confidence": 0.0,
+}
 
 
 async def diagnose(state: dict) -> dict:
@@ -29,15 +35,26 @@ async def diagnose(state: dict) -> dict:
 
     try:
         raw = await call_json(DIAGNOSE_SYSTEM, user_prompt)
-        parsed = DiagnoseOutput.model_validate(raw)
-    except (LLMError, ValidationError) as exc:
-        log.warning("diagnose: failed, defaulting to unknown/low-confidence: %s", exc)
-        return {
-            "drift_class": "unknown",
-            "diagnosis": f"diagnose failed ({type(exc).__name__}) -- escalating rather than guessing",
-            "confidence": 0.0,
-        }
+    except LLMError as exc:
+        log.warning("diagnose: LLM call failed, defaulting to unknown/low-confidence: %s", exc)
+        return dict(_DEFAULT_UNKNOWN)
 
+    valid: list[DiagnoseOutput] = []
+    for candidate in normalize_llm_json(raw):
+        try:
+            valid.append(DiagnoseOutput.model_validate(candidate))
+        except ValidationError:
+            continue
+
+    if not valid:
+        log.warning("diagnose: no valid candidate in response, defaulting to unknown/low-confidence: raw=%r", raw)
+        return dict(_DEFAULT_UNKNOWN)
+
+    # When the model returns multiple candidates that disagree, trust the
+    # most cautious one -- the same "when uncertain, prefer low confidence"
+    # rule that governs every other judgement call in this design applies to
+    # disagreement between the model's own candidates too.
+    parsed = min(valid, key=lambda v: v.confidence)
     return {
         "drift_class": parsed.drift_class,
         "diagnosis": parsed.diagnosis,

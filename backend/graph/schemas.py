@@ -19,6 +19,22 @@ and by name, not silently three nodes later.
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+
+def normalize_llm_json(raw: dict | list) -> list[dict]:
+    """`services.llm.call_json` returns the parsed JSON as-is, including the
+    occasional case (confirmed against openai/gpt-oss-120b, not fixed by
+    reasoning_format="hidden" — a genuine output-shape quirk, not a leaked
+    reasoning trace) where the model wraps its answer as a list of 1-2
+    candidate objects instead of one top-level object. Returns the list of
+    dict candidates to try validating, in the model's own order — a single-
+    item list for the ordinary, correctly-shaped case.
+    """
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return []
+
 from pipeline.mapping import CAST_REGISTRY, NULL_POLICY_REGISTRY
 
 

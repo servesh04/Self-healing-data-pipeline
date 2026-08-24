@@ -6,7 +6,8 @@ Only ever reached when diagnose has already classified the drift as
 NullabilitySpecialistOutput — extra="forbid", plus registry-checked policy
 names — before anything downstream sees it. See spec_rename.py's docstring
 for why this per-specialist validation is what actually catches scope
-leakage, not just the general MappingPatch check.
+leakage, and for why candidates are normalized via normalize_llm_json (first
+valid one wins — no confidence field to tie-break on here).
 """
 
 import json
@@ -14,7 +15,7 @@ import logging
 
 from pydantic import ValidationError
 
-from graph.schemas import NullabilitySpecialistOutput
+from graph.schemas import NullabilitySpecialistOutput, normalize_llm_json
 from pipeline.mapping import NULL_POLICY_REGISTRY
 from prompts.prompts import SPEC_NULLABILITY_SYSTEM, SPEC_NULLABILITY_USER_TEMPLATE
 from services.llm import LLMError, call_json
@@ -34,9 +35,15 @@ async def spec_nullability(state: dict) -> dict:
 
     try:
         raw = await call_json(system_prompt, user_prompt)
-        parsed = NullabilitySpecialistOutput.model_validate(raw)
-    except (LLMError, ValidationError) as exc:
-        log.warning("spec_nullability: failed or emitted an invalid/out-of-scope patch: %s", exc)
+    except LLMError as exc:
+        log.warning("spec_nullability: LLM call failed: %s", exc)
         return {"specialist_output": {}}
 
-    return {"specialist_output": parsed.model_dump()}
+    for candidate in normalize_llm_json(raw):
+        try:
+            parsed = NullabilitySpecialistOutput.model_validate(candidate)
+            return {"specialist_output": parsed.model_dump()}
+        except ValidationError as exc:
+            log.warning("spec_nullability: candidate failed validation (invalid or out-of-scope): %s", exc)
+
+    return {"specialist_output": {}}

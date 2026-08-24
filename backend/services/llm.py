@@ -56,10 +56,11 @@ async def call_json(
     user_prompt: str,
     *,
     temperature: float = 0.1,
-) -> dict:
-    """One JSON-mode completion. Returns the parsed dict — schema validation
-    is the caller's job, not this function's; this function's only contract
-    is "valid JSON or LLMError".
+) -> dict | list:
+    """One JSON-mode completion. Returns the parsed JSON value as-is — a dict
+    in the ordinary case, occasionally a list of candidate dicts (see the
+    comment inline below). Schema validation and shape interpretation are the
+    caller's job; this function's only contract is "valid JSON or LLMError".
     """
     client = _get_client()
     last_exc: Exception | None = None
@@ -79,6 +80,15 @@ async def call_json(
                 timeout=30.0,
             )
             content = response.choices[0].message.content
+            # Groq's JSON mode guarantees valid JSON syntax, not shape. This
+            # model (openai/gpt-oss-120b) has been observed, consistently,
+            # to sometimes wrap its answer as a list of 1-2 candidate objects
+            # instead of a single top-level object — confirmed not fixed by
+            # reasoning_format="hidden", so it's a genuine output-shape quirk,
+            # not a leaked reasoning trace. Returned as-is; interpreting a
+            # list of candidates is domain-specific (see
+            # graph/schemas.py:normalize_llm_json) and belongs to the caller,
+            # not this generic function.
             return json.loads(content)
 
         except RateLimitError as exc:

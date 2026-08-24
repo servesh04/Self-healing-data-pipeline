@@ -20,6 +20,21 @@ observed from a REAL pipeline run — and translates each Pandera failure
 signature into a DriftItem. It does not re-run the pipeline itself; that
 would duplicate work the node immediately before it in the same iteration
 already did.
+
+One deterministic cleanup on top of that translation, found by actually
+running diagnose against real day3_type_drift data: when a column's dtype is
+wrong, Pandera doesn't stop at the dtype check — it goes on to run every
+other check declared for that column too, and a numeric check (e.g. `>= 0`)
+comparing against a still-string value raises a bare Python TypeError, which
+Pandera reports as its own failure case. That second entry carries zero
+information about the data — it's not a value that violates a business rule,
+it's the check machinery failing to even run — but it looks, to a
+classifier, exactly like a second, unrelated drift item. day3 (one real
+fault: a dtype mismatch) was misclassified as "unknown" at low confidence
+for precisely this reason: two drift_items where the rules expect one, with
+nothing in either the rules or the data distinguishing real drift from
+cascading noise. Filtering it here — where it's cheap and certain — is more
+robust than asking every future prompt revision to reason around it.
 """
 
 from graph.state import DriftItem
@@ -43,9 +58,18 @@ def _kind_for(check: str) -> str:
     return "value_violation"  # fallback for e.g. greater_than_or_equal_to(...)
 
 
+def _is_dtype_cascade_artifact(detail: dict) -> bool:
+    """True for a failure that only exists because an earlier dtype mismatch
+    on the same column made some other check's comparison blow up — not a
+    genuine finding about the data.
+    """
+    return any("TypeError(" in str(v) for v in detail.get("example_values", []))
+
+
 def diff_contract(state: dict) -> dict:
     contract = load_contract()
-    details = state.get("assertion_failure_details") or []
+    raw_details = state.get("assertion_failure_details") or []
+    details = [d for d in raw_details if not _is_dtype_cascade_artifact(d)]
 
     drift_items: list[DriftItem] = []
     for d in details:
