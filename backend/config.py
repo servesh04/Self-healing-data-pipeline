@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     # so a stray test run can never shadow the mapping the app itself reads.
     pipeline_env: str = "default"
 
+    # Optional, not required, even though ARCHITECTURE.md lists it as a
+    # deployment env var: Phases 0-2 must keep booting without it, and
+    # services/llm.py raises a clear LLMError (caught by every LLM node,
+    # which then escalates — nodes must never raise) rather than the app
+    # failing to start. Becomes load-bearing once Phase 3's LLM nodes are
+    # live in the deployed graph.
+    groq_api_key: str | None = None
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

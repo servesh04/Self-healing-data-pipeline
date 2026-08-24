@@ -1,43 +1,71 @@
-"""STUB — Phase 2. Real pipeline rerun (backend/pipeline/runner.py) — THE
-ORACLE — arrives in Phase 3. Here the pass/fail outcome is scripted per
-scenario so the heal cycle can be demonstrated deterministically:
+"""Real node — Phase 3, deterministic. THE ORACLE. Reruns the actual
+pipeline with the just-patched mapping in Postgres. Pandera passes or fails —
+ground truth, not an LLM opinion. Appends a HealAttempt to history.
 
-  "heals-in-3"   — fails on attempts 1-2, passes on attempt 3
-  "never-heals"  — always fails (demonstrates the MAX_HEAL_ATTEMPTS cap)
-  anything else  — passes immediately (e.g. the low-confidence-approve path)
-
-Appends exactly one HealAttempt to `history` per call — this is what proves
-the `Annotated[..., operator.add]` reducer actually appends rather than
-overwrites (the Phase 2 Definition of Done item most worth watching closely).
+Populates `assertion_failure_details` from this same run, same as
+run_pipeline — diff_contract reads whichever of the two most recently ran.
+This is the mechanism that makes the drift signal narrow correctly between
+heal attempts (see diff_contract.py's docstring); a stale or partial update
+here would break that.
 """
 
-from graph.nodes._phase2_stub_scenarios import scenario_of
+import logging
+
+from pipeline.contract import load_contract
+from pipeline.runner import run_pipeline as run_the_pipeline
+from services import store
+
+log = logging.getLogger(__name__)
 
 
-def rerun_validate(state: dict) -> dict:
-    scenario = scenario_of(state)
-    attempt_no = state["heal_attempts"]
+async def rerun_validate(state: dict) -> dict:
+    try:
+        mapping = await store.get_current_mapping()
+        contract = load_contract()
+        result = run_the_pipeline(state["source_path"], mapping, contract)
+    except Exception as exc:
+        log.exception("rerun_validate node failed before reaching the pipeline")
+        failure_strs = [f"{type(exc).__name__}: {exc}"]
+        attempt = {
+            "attempt_no": state["heal_attempts"],
+            "drift_summary": state.get("diagnosis") or "",
+            "specialist": f"spec_{state.get('drift_class')}",
+            "patch": state.get("applied_patch") or {},
+            "confidence": state.get("confidence") or 0.0,
+            "approved_by": "human" if state.get("human_decision") else "auto",
+            "result": "failed",
+            "assertion_failures": failure_strs,
+        }
+        return {
+            "assertions_passed": False,
+            "assertion_failures": failure_strs,
+            "assertion_failure_details": [],
+            "history": [attempt],
+        }
 
-    if scenario == "heals-in-3":
-        passed = attempt_no >= 3
-    elif scenario == "never-heals":
-        passed = False
-    else:
-        passed = True
-
-    failures = [] if passed else ["stub: revenue still fails dtype check"]
     attempt = {
-        "attempt_no": attempt_no,
-        "drift_summary": state.get("diagnosis") or "stub",
+        "attempt_no": state["heal_attempts"],
+        "drift_summary": state.get("diagnosis") or "",
         "specialist": f"spec_{state.get('drift_class')}",
         "patch": state.get("applied_patch") or {},
         "confidence": state.get("confidence") or 0.0,
         "approved_by": "human" if state.get("human_decision") else "auto",
-        "result": "passed" if passed else "failed",
-        "assertion_failures": failures,
+        "result": "passed" if result.passed else "failed",
+        "assertion_failures": result.as_strings(),
     }
+
     return {
-        "assertions_passed": passed,
-        "assertion_failures": failures,
+        "assertions_passed": result.passed,
+        "assertion_failures": result.as_strings(),
+        "assertion_failure_details": [
+            {
+                "column": f.column,
+                "check": f.check,
+                "failure_count": f.failure_count,
+                "example_values": f.example_values,
+            }
+            for f in result.failures
+        ],
+        "rows_out": result.rows_out,
         "history": [attempt],
     }

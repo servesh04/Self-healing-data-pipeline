@@ -1,6 +1,6 @@
 """Terminal: needs a human. Never fabricates success — says what drifted,
 what was tried, and why it stopped, using whatever state accumulated
-(history, drift_class), even in Phase 2's stub form.
+(history, drift_class, diagnosis).
 """
 
 
@@ -9,10 +9,11 @@ def escalate(state: dict) -> dict:
     if state.get("human_decision") == "reject":
         reason = "human rejected the proposed patch"
     elif state.get("drift_class") == "unknown":
-        reason = "unclassifiable drift (ambiguous mapping)"
+        diagnosis = state.get("diagnosis")
+        reason = f"unclassifiable drift ({diagnosis})" if diagnosis else "unclassifiable drift"
     else:
         reason = f"exhausted {tried} heal attempt(s) without passing"
     return {
         "status": "escalated",
-        "final_message": f"stub: escalated -- {reason}",
+        "final_message": f"escalated -- {reason}",
     }

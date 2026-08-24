@@ -8,8 +8,8 @@ def commit_report(state: dict) -> dict:
     return {
         "status": "healed" if healed else "clean",
         "final_message": (
-            f"stub: healed after {state['heal_attempts']} attempt(s)"
+            f"healed after {state['heal_attempts']} attempt(s)"
             if healed
-            else "stub: no drift detected"
+            else "no drift detected"
         ),
     }

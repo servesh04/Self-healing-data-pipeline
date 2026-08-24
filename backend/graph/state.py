@@ -80,6 +80,36 @@ class HealState(TypedDict):
     # ── Audit trail — append-only, drives the UI ──
     history: Annotated[list[HealAttempt], operator.add]
 
+    # ── Internal plumbing — NOT in ARCHITECTURE.md's documented schema ──
+    # Added in Phase 3 because the doc's field types (assertion_failures as
+    # list[str], actual_schema as dict[str, str]) are the *display* shapes,
+    # but two real nodes need richer structure than that to do their job
+    # correctly, and TypedDict doesn't forbid extra keys:
+    #
+    # - assertion_failure_details: the structured FailureCase data (column,
+    #   check, example_values) behind assertion_failures' human-readable
+    #   strings. diff_contract re-derives drift_items from THIS on every
+    #   loop iteration — set fresh by both run_pipeline and rerun_validate,
+    #   from the same real pipeline run that also produces
+    #   assertion_failures. This is what makes the signal narrow correctly
+    #   between heal attempts (verified against real day4_combo data before
+    #   writing diff_contract's real logic: 4 failure signals on the empty
+    #   mapping, 2 remaining after a rename-only patch, a strict subset) —
+    #   without it, diff_contract would keep re-showing already-fixed drift,
+    #   which is exactly how an agent ends up proposing overlapping or
+    #   redundant patches instead of converging.
+    # - source_profile: profile_source's null-count/sample-value detail,
+    #   which actual_schema (dtype-only) has no room for.
+    # - specialist_output: the narrow, per-specialist-validated raw output
+    #   (e.g. just {"renames": {...}}) that propose_patch merges. Kept
+    #   separate from proposed_patch so a specialist's output is validated
+    #   against its OWN scoped schema (extra="forbid", only its section)
+    #   before propose_patch ever sees it — a specialist smuggling a key
+    #   from another section fails validation right here, not silently.
+    assertion_failure_details: list[dict]
+    source_profile: dict[str, dict]
+    specialist_output: Optional[dict]
+
 
 MAX_HEAL_ATTEMPTS = 3
 CONFIDENCE_THRESHOLD = 0.75

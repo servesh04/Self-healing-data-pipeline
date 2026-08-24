@@ -18,7 +18,7 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 | **0** | Deployment skeleton — public frontend to public backend, bearer auth, Neon | **done — verified live at the deployed URLs** |
 | **1** | Pipeline + contract + fault datasets | **done** |
 | **2** | Graph skeleton with stub nodes | **done** |
-| 3 | Real nodes (LLM) | not started |
+| **3** | Real nodes (LLM) | **deterministic half done and verified; LLM half written, blocked on `GROQ_API_KEY`** |
 | 4 | Interrupt + Postgres checkpointer | not started |
 | 5 | Dashboard | not started |
 | 6 | Eval, docs, freeze | not started |
@@ -105,6 +105,87 @@ coverage and the Definition of Done explicitly:
 | `low-confidence-approve` / `-reject` | `interrupt()` actually halts (`next == ("human_approval",)`, payload inspectable), `Command(resume=...)` actually resumes at `human_approval` — not from `START` — and both the approve and reject forks route correctly |
 
 All 11 (router, branch) pairs report `[OK]`; all 6 Definition of Done checks report `[PASS]`.
+
+(This phase's `scripts/graph_smoke_test.py` and `backend/graph/nodes/_phase2_stub_scenarios.py`
+were removed once Phase 3 replaced the nodes they depended on — the `stub://` scenario strings
+those real nodes no longer understand — leaving them in place would have silently produced
+misleading output rather than a real regression check. The Phase 2 node sequence and coverage
+table above are preserved from the verified run, not reproducible by re-running the repo as it
+stands now.)
+
+---
+
+## Phase 3 — real nodes
+
+Split into a deterministic half (no LLM, fully verified against real data) and an LLM half
+(written and unit-verified against a mocked model, but not yet run against a real one —
+**blocked on `GROQ_API_KEY`**, which this repo has never had).
+
+### Deterministic half — done, verified
+
+`profile_source` and `diff_contract` are real; `run_pipeline`, `rerun_validate`, and
+`apply_patch` now call the actual Phase 1 pipeline and persist to Postgres instead of returning
+hardcoded dicts.
+
+The one design decision worth explaining: `diff_contract` sits on the heal-cycle's loop-back edge
+(`route_after_rerun` loops to it, not back to `profile_source`), so its output must genuinely
+change between iterations — otherwise diagnose sees the same "everything is still wrong" picture
+on attempt 2 as attempt 1, which is exactly how an agent ends up proposing overlapping or
+redundant patches instead of converging. Verified against real `day4_combo` data before writing
+the fix: with an empty mapping, Pandera reports 4 failure signals; after a rename-only patch, only
+2 remain — a strict subset. So `diff_contract` derives `drift_items` from
+`assertion_failure_details` (the structured form behind `assertion_failures`, refreshed by
+whichever of `run_pipeline`/`rerun_validate` most recently ran), not from a one-time raw-file
+snapshot.
+
+Proven end-to-end with a rule-based stand-in for diagnose (correct-by-construction classification,
+not the real LLM — this isolates "does my new code work" from "is the prompt any good"), using an
+isolated `pipeline_env` throughout:
+
+| Dataset | Result |
+|---|---|
+| `day1_clean` | `clean`, 0 attempts |
+| `day2_renamed` | `healed`, exactly 1 attempt |
+| `day3_type_drift` | `healed`, exactly 1 attempt |
+| `day4_combo` | `healed`, **exactly 2 attempts** — matches the Phase 3 DoD's "not eventually passes" |
+
+Also confirmed the real graph — the actual `build_graph()`, mixing sync (`profile_source`,
+`diff_contract`) and async (everything touching Postgres or Groq) node functions in one
+`StateGraph` for the first time — compiles and runs correctly with no LLM key configured at all:
+`day1_clean` passes straight through with no LLM call needed, and `day2_renamed` (which does need
+one) has `diagnose` fail cleanly on the missing key and the run escalate rather than crash —
+`nodes must never raise`, holding even under a real, not simulated, failure.
+
+### LLM half — written, unit-verified, not yet tuned
+
+`backend/services/llm.py` (Groq, `openai/gpt-oss-120b`, JSON mode, retry with backoff on
+`RateLimitError`), `backend/prompts/prompts.py`, and the real `diagnose` / `spec_rename` /
+`spec_type` / `spec_nullability` / `propose_patch` nodes are written. Every LLM node validates its
+parsed JSON against a Pydantic model in `backend/graph/schemas.py` before returning — required
+regardless of JSON mode, which guarantees syntax, not schema.
+
+**Specialist scope leakage** — each specialist's raw output is validated against its *own*
+narrowly-scoped model (`RenameSpecialistOutput`, `TypeSpecialistOutput`,
+`NullabilitySpecialistOutput`), each `extra="forbid"` and declaring only its one mapping section.
+This is deliberately not just a `MappingPatch` check: `MappingPatch` declares all four sections as
+optional, so a rename specialist that also emits a stray `casts` key would pass general validation
+silently and just look like a small, unrelated, harmless patch fragment — exactly the failure mode
+that's expensive to debug later. `propose_patch` gets the same protection in the other direction:
+its own model validates only `{"rationale": ...}`, so if it tries to invent its own patch content
+instead of describing the specialist's, that's also caught immediately.
+
+Verified with the LLM call mocked (10 cases: valid responses, a missing field, an out-of-range
+confidence, a leaked `casts` key from the rename specialist, an unknown cast op name, a leaked
+`patch` key from `propose_patch`) — every malformed/leaked case is caught and handled per the
+"nodes must never raise" guardrail, without ever reaching a real model. This is plumbing
+verification, not prompt tuning; it cannot substitute for the latter.
+
+**What genuinely requires the API key and has not been done**: running `diagnose` against real
+`day2`/`day3`/`day5` data to see what confidence it actually produces, and tuning
+`prompts.py`'s `DIAGNOSE_SYSTEM` against that — the entire escalation story depends on `day5`
+coming back low-confidence *and* `day2`/`day3` staying high-confidence, and neither can be
+verified without a real model. Also unverified: whether the real (not rule-based) diagnose +
+specialists converge `day4_combo` in exactly 2 attempts against the real prompts.
 
 ---
 
