@@ -742,15 +742,21 @@ fires. Stub one path with `confidence=0.3` to reach `human_approval`.
 # Phase 4 — Interrupt + Checkpointer (Day 2, 16:00–19:00)
 
 1. Postgres checkpointer wired, `thread_id = run_id`
-2. `human_approval` calls `interrupt()`
+2. `human_approval` calls `interrupt()` — done since Phase 2; reused as-is, only the checkpointer
+   backing it changes (`InMemorySaver` → `AsyncPostgresSaver`)
 3. `POST /approve` and `/reject` resume the graph
-4. **Restart the backend between interrupt and approval. Verify it resumes correctly.**
+4. **Kill the backend process entirely between interrupt and approval — not a reload, a real
+   process restart — for both the approve and the reject path. Verify each resumes correctly.**
 
 **Definition of Done**
-- [ ] `day5` halts with `status: "awaiting_approval"` and returns the patch
-- [ ] Approve resumes from `human_approval`, not from START
-- [ ] Reject routes to `escalate` with the human's note recorded
-- [ ] Resume works **after a full process restart**
+- [ ] `day6_ambiguous_rename` halts with `status: "awaiting_approval"` and returns the patch
+      (not `day5` — see Fault Datasets; `day5` escalates directly and never reaches this node)
+- [ ] Approve resumes from `human_approval`, not from START, **after a full process kill and
+      restart** — not merely proven against the in-memory checkpointer from Phase 2
+- [ ] Reject routes to `escalate` with the human's note recorded, **also verified after a full
+      process kill and restart** — a different resume value and a different downstream route
+      than approve; one working does not imply the other does, and `apply_patch` must not fire
+      on this path (`heal_attempts` stays at its pre-interrupt value)
 
 > **Cut point:** if this is not working by 19:00 Day 2, auto-apply all patches and make the
 > approval panel a read-only "here's what it did" log. Decide at 19:00 — not at 1am.

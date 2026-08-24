@@ -19,7 +19,7 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 | **1** | Pipeline + contract + fault datasets | **done** |
 | **2** | Graph skeleton with stub nodes | **done** |
 | **3** | Real nodes (LLM) | **done — tuned and verified against a real model, all 6 fault datasets** |
-| 4 | Interrupt + Postgres checkpointer | not started |
+| **4** | Interrupt + Postgres checkpointer | **done — verified across a real process kill and restart, both approve and reject** |
 | 5 | Dashboard | not started |
 | 6 | Eval, docs, freeze | not started |
 
@@ -218,6 +218,64 @@ LLM call — including `day6`'s full interrupt → real patch review → `Comman
 
 ---
 
+## Phase 4 — interrupt + Postgres checkpointer
+
+`backend/services/checkpointer.py` wraps `AsyncPostgresSaver` around the same lifespan-owned
+pool `db.py` already manages — confirmed against `langgraph-checkpoint-postgres` 3.1.2 before
+writing it: the constructor accepts either a bare connection or an `AsyncConnectionPool`, and
+every internal cursor opens with its own explicit `row_factory=dict_row` regardless of the
+pool's default, so there's no conflict with `db.py`'s pool-wide setting. `main.py`'s lifespan
+calls `setup_checkpointer()` (idempotent — a version-tracked migrations table, safe on every
+boot) and compiles the graph once per process onto `app.state.graph_app`.
+
+`backend/routers/runs.py` adds the four endpoints this phase needs to prove over real HTTP:
+`POST /api/runs` (trigger), `GET /api/runs/{id}` (poll — synthesizes `api_status:
+"awaiting_approval"` from the checkpointer's own pending-interrupt state, since `human_approval`
+can't have written that into `HealState` itself: the node never returns while parked inside
+`interrupt()`), `POST /api/runs/{id}/approve`, `POST /api/runs/{id}/reject`. Upload and
+run-listing are Phase 5 dashboard concerns, not needed to prove this phase's mechanism.
+
+**The test that matters: a real process kill, not a reload.** Triggered `day6_ambiguous_rename`
+over HTTP, polled until `awaiting_approval`, confirmed the exact state (`next: ["human_approval"]`,
+the real proposed patch, `heal_attempts: 0`) — then hard-killed the backend process outright
+(`Stop-Process -Force`, port confirmed released) and, before starting anything new, queried
+Postgres directly and independently of the application: **8 checkpoint rows existed for that
+`thread_id`, written by a process that no longer existed.** Started a completely fresh process
+(new PID, new `AsyncPostgresSaver` instance, zero in-memory knowledge of the run) and confirmed
+`GET /api/runs/{id}` returned the identical state from Postgres alone. Then approved.
+
+The rigorous proof isn't "it healed" — a broken checkpointer that silently restarted from
+`START` could plausibly reach the same end state by re-running everything and getting lucky
+with the same diagnosis. The proof is grepping **the fresh process's own log, from its very
+first line**, and finding no `run_pipeline`/`diagnose` entries for that run at all:
+
+```
+run <id>: node 'human_approval' fired
+run <id>: node 'apply_patch' fired
+run <id>: node 'rerun_validate' fired
+run <id>: node 'commit_report' fired
+```
+
+Repeated identically for reject, on a second run and a third fresh process (different resume
+value, different downstream route — approve resuming correctly doesn't imply reject does; they
+share nothing except the interrupt itself). The fresh process's log:
+
+```
+run <id>: node 'human_approval' fired
+run <id>: node 'escalate' fired
+```
+
+`heal_attempts` stayed `0` and `applied_patch` stayed `null` — confirming `apply_patch` never
+fired on the reject path, exactly the guardrail it must never violate. Both runs' checkpoints
+were also confirmed present in Postgres by direct query, independent of the API layer, both
+before and after their respective process kills.
+
+All of this ran under an isolated `PIPELINE_ENV=phase4-test` (reset between the two test runs,
+since the first run's approved patch would otherwise have made the second run's data pass
+cleanly with no drift to heal) — the live `default` mapping was confirmed untouched throughout.
+
+---
+
 ## Recorded versions
 
 Verified against the installed packages, not against documentation.
@@ -314,15 +372,21 @@ docker run --rm -p 8199:10000 -e PORT=10000 \
 
 ---
 
-## API (Phase 0)
+## API
 
 | Route | Auth | Purpose |
 |---|---|---|
 | `GET /health` | none | Liveness. Deliberately does **not** touch the DB, so a suspended Neon compute cannot make the deploy look unhealthy. |
 | `GET /` | none | Service banner. |
-| `GET /api/ping` | Bearer | Authenticated round-trip. Writes a row to `deploy_probe` and reports the Postgres version plus recorded package versions. |
+| `GET /api/ping` | Bearer | Authenticated round-trip. Writes a row to `deploy_probe` and reports the Postgres version plus recorded package versions. (Phase 0) |
+| `POST /api/runs` | Bearer | `{source_path}` → `{run_id}`. Runs the graph in a background task; poll rather than WebSocket. (Phase 4) |
+| `GET /api/runs/{id}` | Bearer | Full `HealState`, plus `api_status`/`awaiting_approval` synthesized from the checkpointer's own pause state. (Phase 4) |
+| `POST /api/runs/{id}/approve` | Bearer | `{note?}` → resumes from `human_approval`, not `START`. (Phase 4) |
+| `POST /api/runs/{id}/reject` | Bearer | `{note?}` → resumes and routes to `escalate`; `apply_patch` never fires. (Phase 4) |
 
 All `/api/*` routes require `Authorization: Bearer <SHARED_TOKEN>`; anything else returns 401.
+Upload and run-listing (`POST /api/sources/upload`, `GET /api/runs`) are Phase 5 dashboard
+concerns and not yet built.
 
 ---
 

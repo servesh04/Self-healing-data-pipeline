@@ -24,7 +24,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import db
 from auth import require_token
 from config import Settings, get_settings
-from services import store
+from graph.build import build_graph
+from routers import runs
+from services import checkpointer, store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,11 +69,20 @@ async def lifespan(app: FastAPI):
     try:
         await db.init_schema()
         await store.init_mapping_table()
+        await checkpointer.setup_checkpointer()
     except Exception:
         # A cold Neon compute can miss the first statement. Do not crash the
         # app: /health must stay green so the platform does not kill the
         # instance, and /api/ping reports the real error on demand.
         log.exception("startup: schema init failed (will retry on first /api/ping)")
+
+    # Compiled once per process and reused across every request — build_graph
+    # itself is cheap, but the checkpointer and node wiring have no reason to
+    # be rebuilt per call. Stored on app.state (not a module-level global) so
+    # it's explicitly request-accessible via Depends, the ordinary FastAPI way
+    # to share a resource without hidden import-time state.
+    app.state.graph_app = build_graph(checkpointer.get_checkpointer())
+    log.info("startup: graph compiled")
 
     try:
         yield
@@ -95,6 +106,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(runs.router)
 
 
 # ── Unauthenticated ──────────────────────────────────────────────────────────
@@ -126,6 +139,7 @@ async def ping(settings: Settings = Depends(get_settings)) -> dict:
     try:
         await db.init_schema()  # idempotent; covers a failed cold start above
         await store.init_mapping_table()
+        await checkpointer.setup_checkpointer()
         db_info = await db.write_probe("api-ping", settings.app_env)
         db_info["server_version"] = await db.server_version()
     except Exception as exc:
