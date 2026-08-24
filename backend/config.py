@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     # Informational only in Phase 0 — reported by /api/ping.
     app_env: str = "local"
 
+    # Namespace for mapping_state rows (backend/services/store.py). The real
+    # app — local dev and the deployed Render instance alike — uses "default"
+    # unless overridden. Test/verification scripts (scripts/check_pipeline.py)
+    # pass their own literal namespace explicitly rather than relying on this,
+    # so a stray test run can never shadow the mapping the app itself reads.
+    pipeline_env: str = "default"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

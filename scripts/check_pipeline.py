@@ -3,10 +3,13 @@
     day1 passes; day2-day5 each fail with the expected assertion error;
     manually patching the mapping makes day2 pass.
 
-Talks to Postgres directly (reuses backend/db.py + services/store.py) so the
-mapping it reads and patches is the same live state the deployed API would
-see — not a local file. Run from the backend/ directory so its relative
-imports resolve, with DATABASE_URL set (.env is picked up automatically):
+Talks to Postgres directly (reuses backend/db.py + services/store.py) — same
+DATABASE_URL the deployed app uses, so persistence here is real, not mocked.
+It writes under its own pipeline_env namespace (CHECK_ENV below), never the
+app's "default" one, so a run of this script can never leave a patch behind
+that the live app would pick up as its current mapping. Run from the
+backend/ directory so its relative imports resolve, with DATABASE_URL set
+(.env is picked up automatically):
 
     cd backend
     ../.venv/Scripts/python.exe ../scripts/check_pipeline.py
@@ -27,6 +30,13 @@ from pipeline.runner import run_pipeline  # noqa: E402
 from services import store  # noqa: E402
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "sources"
+
+# Namespace for every store.* call this script makes. Deliberately distinct
+# from Settings.pipeline_env's "default" (what the real app reads), and
+# hardcoded here rather than read from PIPELINE_ENV — so this script's
+# isolation from the live mapping does not depend on remembering to set an
+# env var before running it.
+CHECK_ENV = "phase-check"
 
 DATASETS = [
     ("day1_clean.csv", "pass", "control — no fault injected"),
@@ -52,7 +62,8 @@ async def main() -> None:
     print("PHASE 1 VERIFICATION — run all 5 fault datasets with the seed mapping")
     print("=" * 78)
 
-    seed_mapping = await store.get_current_mapping()
+    seed_mapping = await store.get_current_mapping(pipeline_env=CHECK_ENV)
+    print(f"pipeline_env namespace: {CHECK_ENV!r} (isolated from the app's 'default')")
     print(f"current mapping (from Postgres): {seed_mapping.model_dump()}\n")
 
     all_ok = True
@@ -81,10 +92,12 @@ async def main() -> None:
     print(f"day2_renamed BEFORE patch: {'pass' if before.passed else 'fail'}")
 
     patch = MappingPatch(renames={"cust_id": "customer_id"})
-    saved = await store.save_mapping(patch, updated_by="phase1-manual-check")
+    saved = await store.save_mapping(
+        patch, updated_by="phase1-manual-check", pipeline_env=CHECK_ENV
+    )
     print(f"patch saved to Postgres: {saved.model_dump()}")
 
-    reloaded = await store.get_current_mapping()
+    reloaded = await store.get_current_mapping(pipeline_env=CHECK_ENV)
     after = run_pipeline(str(DATA_DIR / "day2_renamed.csv"), reloaded, contract)
     print(f"day2_renamed AFTER patch (mapping re-read from Postgres): "
           f"{'pass' if after.passed else 'fail'}")
@@ -92,7 +105,7 @@ async def main() -> None:
         for f in after.failures:
             print(f"    - {f.summary()}")
 
-    history = await store.mapping_history(limit=5)
+    history = await store.mapping_history(limit=5, pipeline_env=CHECK_ENV)
     print(f"\nmapping_state history (most recent {len(history)} rows):")
     for row in history:
         print(f"  id={row['id']}  by={row['updated_by']}  at={row['created_at']}  "
@@ -110,8 +123,8 @@ async def main() -> None:
 
     await db.close_pool()
 
-    # Leave the live mapping clean for whoever runs this next / for Phase 2.
-    # (Not undone above: the append-only history is the point — see store.py.)
+    # No cleanup needed: everything above wrote to pipeline_env=CHECK_ENV,
+    # never to "default", so the app's live mapping was never touched.
 
     sys.exit(0 if (all_ok and patch_proves_healing) else 1)
 
