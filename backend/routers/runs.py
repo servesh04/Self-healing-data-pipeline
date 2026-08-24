@@ -6,6 +6,16 @@ Run the graph in a FastAPI BackgroundTask; poll rather than WebSocket
 (ARCHITECTURE.md's API section, "Run the graph in a FastAPI BackgroundTask").
 Upload and run-listing endpoints are Phase 5 dashboard concerns, not needed
 to prove this phase's mechanism — deliberately not built here.
+
+Found on the deployed backend, not locally: main.py's lifespan calls
+checkpointer.setup_checkpointer() once at startup, wrapped in the same
+best-effort try/except as db.init_schema() — a cold Neon compute can make
+that first call fail, exactly the class of failure db.py already retries on
+first /api/ping. Every route here previously had no equivalent, so
+GET /api/runs/{id} 500'd until something happened to call /api/ping first.
+_ensure_checkpointer_ready, below, closes that gap directly on this
+router — idempotent and cheap once the tables exist, so retrying it on
+every request costs one metadata SELECT, not a real setup re-run.
 """
 
 import logging
@@ -17,10 +27,24 @@ from pydantic import BaseModel
 
 from auth import require_token
 from graph.state import RECURSION_LIMIT
+from services import checkpointer
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/runs", tags=["runs"], dependencies=[Depends(require_token)])
+
+async def _ensure_checkpointer_ready() -> None:
+    try:
+        await checkpointer.setup_checkpointer()
+    except Exception:
+        log.exception("runs: checkpointer setup retry failed")
+        raise HTTPException(status_code=503, detail="checkpoint store unavailable, try again")
+
+
+router = APIRouter(
+    prefix="/api/runs",
+    tags=["runs"],
+    dependencies=[Depends(require_token), Depends(_ensure_checkpointer_ready)],
+)
 
 
 class TriggerRunRequest(BaseModel):
