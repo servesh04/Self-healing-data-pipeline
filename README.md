@@ -17,7 +17,7 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 |---|---|---|
 | **0** | Deployment skeleton — public frontend to public backend, bearer auth, Neon | **done — verified live at the deployed URLs** |
 | **1** | Pipeline + contract + fault datasets | **done** |
-| 2 | Graph skeleton with stub nodes | not started |
+| **2** | Graph skeleton with stub nodes | **done** |
 | 3 | Real nodes (LLM) | not started |
 | 4 | Interrupt + Postgres checkpointer | not started |
 | 5 | Dashboard | not started |
@@ -66,6 +66,45 @@ the pipeline now passes — proving the mapping is a real healing target, not ju
 | `day3_type_drift` | `revenue` as `"1,240.00"` strings | fails: `dtype('float64')` |
 | `day4_combo` | rename + type drift together | fails both signatures at once; passes with both patches applied together |
 | `day5_unfixable` | `region` abbreviated to `N/S/E/W` + new `currency` column | fails: `column_in_schema` (currency) + `isin(...)` (region) — confirmed **not** healable by any single mapping op, by design |
+
+---
+
+## Phase 2 — graph skeleton with stub nodes
+
+`backend/graph/` wires the full topology from ARCHITECTURE.md's "Graph Topology" section — 13
+nodes, 4 named routers (`route_after_run`, `route_after_diagnose`, `route_after_confidence`,
+`route_after_rerun`) plus one necessary fifth conditional edge (`route_after_human_approval`,
+dispatching the human's own decision rather than pipeline/agent state — not one of the rubric's
+named four, but the topology diagram's approve/reject fork requires a callable regardless).
+Every node body is a hardcoded dict, keyed by a scenario string smuggled through `source_path`
+(`stub://heals-in-3`, `stub://never-heals`, ...) — see
+`backend/graph/nodes/_phase2_stub_scenarios.py`, deliberately marked as scaffolding that Phase 3
+replaces. **Zero LLM calls, zero prompts.**
+
+Two things are real already, not stubbed, because they're graph-topology guardrails rather than
+pipeline logic: `apply_patch` increments `heal_attempts` from actual prior state (never a
+router), and `human_approval` calls the real `interrupt()` — compiled against an in-memory
+checkpointer for now; Phase 4 swaps in the Postgres one without touching this code.
+
+**Verify it yourself:**
+
+```bash
+cd backend
+../.venv/Scripts/python.exe ../scripts/graph_smoke_test.py
+```
+
+Runs five scenarios, printing the live node sequence for each, then reports router/branch
+coverage and the Definition of Done explicitly:
+
+| Scenario | Proves |
+|---|---|
+| `clean` | `route_after_run`'s pass branch — no healing at all |
+| `heals-in-3` | the heal cycle itself: fails attempts 1–2, passes on 3, cycling `spec_rename → spec_type → spec_nullability` across the three specialist branches, `history` accumulating 3 distinct entries (not overwritten) |
+| `never-heals` | `MAX_HEAL_ATTEMPTS` cap → `escalate` |
+| `unknown-drift` | `route_after_diagnose`'s direct-to-`escalate` branch |
+| `low-confidence-approve` / `-reject` | `interrupt()` actually halts (`next == ("human_approval",)`, payload inspectable), `Command(resume=...)` actually resumes at `human_approval` — not from `START` — and both the approve and reject forks route correctly |
+
+All 11 (router, branch) pairs report `[OK]`; all 6 Definition of Done checks report `[PASS]`.
 
 ---
 
