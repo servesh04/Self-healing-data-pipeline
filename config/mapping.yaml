@@ -1,0 +1,9 @@
+# Seed only. The live mapping lives in Postgres (mapping_state table) from
+# the moment the app first boots — this file is read exactly once, to seed an
+# empty table. Render's disk is ephemeral; editing this file after deploy has
+# no effect on a running service. See backend/services/store.py.
+
+renames: {} # e.g. { cust_id: customer_id }
+casts: {} # e.g. { revenue: strip_commas_to_float }
+null_policy: {} # e.g. { region: fill_unknown }
+drops: []

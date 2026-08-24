@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import db
 from auth import require_token
 from config import Settings, get_settings
+from services import store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,11 +66,12 @@ async def lifespan(app: FastAPI):
     await db.open_pool(settings.database_url)
     try:
         await db.init_schema()
+        await store.init_mapping_table()
     except Exception:
         # A cold Neon compute can miss the first statement. Do not crash the
         # app: /health must stay green so the platform does not kill the
         # instance, and /api/ping reports the real error on demand.
-        log.exception("startup: init_schema failed (will retry on first /api/ping)")
+        log.exception("startup: schema init failed (will retry on first /api/ping)")
 
     try:
         yield
@@ -123,6 +125,7 @@ async def ping(settings: Settings = Depends(get_settings)) -> dict:
     db_error: str | None = None
     try:
         await db.init_schema()  # idempotent; covers a failed cold start above
+        await store.init_mapping_table()
         db_info = await db.write_probe("api-ping", settings.app_env)
         db_info["server_version"] = await db.server_version()
     except Exception as exc:

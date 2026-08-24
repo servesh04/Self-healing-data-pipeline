@@ -15,8 +15,8 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 
 | Phase | Scope | Status |
 |---|---|---|
-| **0** | Deployment skeleton — public frontend to public backend, bearer auth, Neon | **verified locally; awaiting cloud provisioning** |
-| 1 | Pipeline + contract + fault datasets | not started |
+| **0** | Deployment skeleton — public frontend to public backend, bearer auth, Neon | **done — verified live at the deployed URLs** |
+| **1** | Pipeline + contract + fault datasets | **done** |
 | 2 | Graph skeleton with stub nodes | not started |
 | 3 | Real nodes (LLM) | not started |
 | 4 | Interrupt + Postgres checkpointer | not started |
@@ -24,7 +24,48 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 | 6 | Eval, docs, freeze | not started |
 
 Phase 0 contains **no pipeline code and no LangGraph usage** by design. `langgraph` is installed
-and its version recorded, but nothing imports it yet.
+and its version recorded, but nothing imports it yet. Phase 1 adds the deterministic pipeline,
+contract, and fault datasets — still zero LLM calls and zero LangGraph.
+
+---
+
+## Phase 1 — pipeline, contract, fault datasets
+
+`backend/pipeline/` implements `load -> apply_mapping -> transform -> validate` exactly as
+specified. Pandera (`pandera.pandas`) is the oracle; `validate()` never raises — it converts
+`SchemaErrors` into a structured, parseable `FailureCase` list (column, check, failure count,
+example values).
+
+The mapping — the only thing the healing agent will ever be allowed to write — is a
+`MappingPatch` Pydantic model (`backend/pipeline/mapping.py`) with `extra="forbid"` and
+registry-checked op names, so a patch naming an unknown cast or an out-of-section key fails
+validation rather than being silently accepted. It is persisted in Postgres
+(`backend/services/store.py`, table `mapping_state`) as an **append-only** log — each save is a
+new row, so the previous mapping is never lost, which is also what
+"`apply_patch` backs up the current mapping" (ARCHITECTURE.md) means in practice. This was live
+data on the deployed backend from the moment Phase 1 landed, not something added later.
+
+**Verify it yourself:**
+
+```bash
+cd backend
+../.venv/Scripts/python.exe ../scripts/gen_fault_datasets.py   # (re)generates data/sources/*.csv
+../.venv/Scripts/python.exe ../scripts/check_pipeline.py       # runs the Phase 1 DoD checks
+```
+
+`check_pipeline.py` talks to the real `DATABASE_URL` from `.env` — the same Postgres the
+deployed backend uses — so it is exercising actual persistence, not a mock. It prints, for every
+fault dataset, the expected vs. actual pass/fail and the full structured failure list; then it
+manually patches `day2_renamed`'s rename fault, saves it to Postgres, reloads it, and confirms
+the pipeline now passes — proving the mapping is a real healing target, not just a schema.
+
+| Dataset | Injected fault | Result |
+|---|---|---|
+| `day1_clean` | none | passes |
+| `day2_renamed` | `customer_id` → `cust_id` | fails: `column_in_schema` / `column_in_dataframe`; passes after `renames: {cust_id: customer_id}` |
+| `day3_type_drift` | `revenue` as `"1,240.00"` strings | fails: `dtype('float64')` |
+| `day4_combo` | rename + type drift together | fails both signatures at once; passes with both patches applied together |
+| `day5_unfixable` | `region` abbreviated to `N/S/E/W` + new `currency` column | fails: `column_in_schema` (currency) + `isin(...)` (region) — confirmed **not** healable by any single mapping op, by design |
 
 ---
 

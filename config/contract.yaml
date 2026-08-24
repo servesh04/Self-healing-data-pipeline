@@ -1,0 +1,33 @@
+# Declared contract — the baseline the pipeline is checked against.
+#
+# Deviation from ARCHITECTURE.md: `region` is declared here as `str`, not
+# `object`. On pandas 3 a plain string column infers as the `str` dtype, not
+# `object` — declaring `object` would fail day1_clean.csv (the control case)
+# and spuriously trigger the heal loop. See README "Deviation from
+# ARCHITECTURE.md". Verified against pandera 0.32.1 + pandas 3.0.5.
+
+columns:
+  order_id:
+    dtype: int64
+    nullable: false
+    unique: true
+
+  customer_id:
+    dtype: int64
+    nullable: false
+
+  region:
+    dtype: str
+    nullable: false
+    allowed: [North, South, East, West]
+
+  order_date:
+    dtype: datetime64[ns]
+    nullable: false
+
+  revenue:
+    dtype: float64
+    nullable: false
+    min: 0
+
+row_count_min: 20
