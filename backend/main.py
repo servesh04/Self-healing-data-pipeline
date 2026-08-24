@@ -25,7 +25,7 @@ import db
 from auth import require_token
 from config import Settings, get_settings
 from graph.build import build_graph
-from routers import runs
+from routers import config, runs
 from services import checkpointer, store
 
 logging.basicConfig(
@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
     try:
         await db.init_schema()
         await store.init_mapping_table()
+        await store.init_runs_table()
         await checkpointer.setup_checkpointer()
     except Exception:
         # A cold Neon compute can miss the first statement. Do not crash the
@@ -108,6 +109,7 @@ app.add_middleware(
 )
 
 app.include_router(runs.router)
+app.include_router(config.router)
 
 
 # ── Unauthenticated ──────────────────────────────────────────────────────────
@@ -139,6 +141,7 @@ async def ping(settings: Settings = Depends(get_settings)) -> dict:
     try:
         await db.init_schema()  # idempotent; covers a failed cold start above
         await store.init_mapping_table()
+        await store.init_runs_table()
         await checkpointer.setup_checkpointer()
         db_info = await db.write_probe("api-ping", settings.app_env)
         db_info["server_version"] = await db.server_version()

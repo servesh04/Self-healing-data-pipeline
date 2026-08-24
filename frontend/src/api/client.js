@@ -45,3 +45,26 @@ export async function probeAuthRejection() {
     return { rejected: err.status === 401, status: err.status ?? 0 }
   }
 }
+
+// ── Phase 5: runs + config ───────────────────────────────────────────────
+export const listRuns = () => request('/api/runs')
+export const triggerRun = (sourcePath) =>
+  request('/api/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_path: sourcePath }),
+  })
+export const getRun = (runId) => request(`/api/runs/${runId}`)
+export const approveRun = (runId, note) =>
+  request(`/api/runs/${runId}/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: note ?? null }),
+  })
+export const rejectRun = (runId, note) =>
+  request(`/api/runs/${runId}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: note ?? null }),
+  })
+export const getCurrentMapping = () => request('/api/config/mapping')

@@ -20,7 +20,7 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 | **2** | Graph skeleton with stub nodes | **done** |
 | **3** | Real nodes (LLM) | **done — tuned and verified against a real model, all 6 fault datasets** |
 | **4** | Interrupt + Postgres checkpointer | **done — verified across a real process kill and restart, both approve and reject** |
-| 5 | Dashboard | not started |
+| **5** | Dashboard | **done — hand-rolled SVG GraphCanvas, verified against 5 real run states** |
 | 6 | Eval, docs, freeze | not started |
 
 Phase 0 contains **no pipeline code and no LangGraph usage** by design. `langgraph` is installed
@@ -276,6 +276,57 @@ cleanly with no drift to heal) — the live `default` mapping was confirmed unto
 
 ---
 
+## Phase 5 — dashboard
+
+Two backend additions, both needed before the frontend could show anything real: a lightweight
+run registry (`run_records` — the checkpointer has no listing API, so `GET /api/runs` needs
+*something* to enumerate before it can ask the checkpointer for each one's live status), and a
+`run_id` column on `mapping_state` so `GET /api/runs/{id}` can return a per-run patch audit trail
+instead of the whole namespace's history with every run mixed together — the addition suggested
+for this phase, and cheap precisely because `mapping_state` was already append-only from Phase 1.
+
+**GraphCanvas is the priority panel**, per explicit project direction: the `↺ Heal attempt N`
+badge is the single most important pixel in the project, prioritized over every other panel.
+Hand-rolled SVG (`components/GraphCanvas/topology.js` + `GraphCanvas.jsx`) — no React Flow, same
+reasoning as everywhere else in this build: the topology is fixed and known, a layout library is
+a dependency and a bundle-size cost for zero marks. Node "visited" status is inferred from the
+polled `HealState` snapshot (missing_column/unexpected_column pairs, `history` entries, terminal
+status) rather than tracked live — REST polling has no per-node event stream (`next` only tells
+you the interrupt's pause point precisely; ARCHITECTURE.md already notes SSE as a known
+limitation), so the canvas is honest about that rather than faking finer-grained animation.
+
+**A real bug found via testing, not inspection**: the first `deriveVisited` pass only looked at
+the *current* `drift_class`/`confidence` fields, which reflect the most recent `diagnose` call —
+for `day4_combo`, a second diagnose call failing after the first one's rename fix succeeded
+erased the rename attempt from the graph's visited-node coloring entirely, even though it had
+genuinely happened. Fixed by also walking `history`, whose entries never get overwritten. Caught
+by screenshotting a real escalated run and asking why half the nodes were idle-colored when the
+`history` array clearly showed a completed attempt — not by re-reading the component code.
+
+**Verified against 5 real run states**, captured via Playwright driving actual Chrome against the
+Vite dev server and the local backend (screenshots, not just component code review):
+escalated-via-cap (`day4_combo`, rate-limited mid-cycle — see the note below), healed-via-auto-apply,
+healed-via-human-approval, escalated-via-rejection, and clean (no drift). Each state's GraphCanvas
+coloring, AssertionBars, SchemaDiff, PatchDiff, and (where applicable) MappingAudit and
+AttemptTimeline were checked against the actual JSON the backend returned, not assumed from the
+component code. Found and fixed a second real bug this way: `PatchDiff` showed the *current*
+`confidence`/`drift_class` fields next to an *already-applied* patch — for the same reason as the
+GraphCanvas bug, a later diagnose call's confidence had overwritten the value that actually
+justified the currently-displayed patch, making a correctly-applied high-confidence fix look like
+a 0.00-confidence guess. Fixed by sourcing both fields from the `history` entry that produced the
+displayed patch, falling back to the live fields only when showing a not-yet-applied proposal.
+
+**A Groq free-tier daily quota exhaustion happened live during this phase's verification** (visible
+in `backend`'s own logs: rate-limited, retried with backoff, then degraded to
+`unknown`/`confidence: 0.0` and escalated) — not a bug, but worth being transparent about: it's
+why some of this phase's live-trigger screenshots show an escalation where a clean auto-heal was
+expected. The dashboard rendered every one of those states correctly, including the guardrail
+working exactly as designed under a real, not simulated, failure — `day2`/`day3`/`day4`'s
+consistent auto-heal behavior was already exhaustively verified against a fresh quota in Phase 3
+(25/25 across a repeatability sweep) and is not being re-litigated here.
+
+---
+
 ## Recorded versions
 
 Verified against the installed packages, not against documentation.
@@ -429,4 +480,12 @@ Then add the real Vercel origin to `CORS_ORIGINS` on Render and redeploy.
 - `VITE_SHARED_TOKEN` is inlined into the client bundle, so the shared token is public to anyone
   who loads the page. This is inherent to the single-shared-token design in ARCHITECTURE.md
   (no user accounts, no JWT) and is acceptable only for a demo deployment.
+- `GET /api/runs` enriches every listed run with a live checkpointer read (`aget_state`) on every
+  call — fine at demo scale (a handful of runs), but each read goes through the checkpointer's own
+  serializing lock plus a Neon round-trip, so list latency grows linearly with run count. Not
+  optimized (e.g. caching terminal-status runs) since the demo never approaches a scale where it
+  matters.
+- GraphCanvas's node coloring is inferred from the polled snapshot (which nodes were visited,
+  ever), not a live per-node execution stream — REST polling has no such stream to show. This
+  matches ARCHITECTURE.md's own "poll rather than WebSocket... note SSE as a known limitation".
 - Further limitations are recorded per phase as the build proceeds.

@@ -37,7 +37,9 @@ async def apply_patch(state: dict) -> dict:
             drops=list(dict.fromkeys([*current.drops, *patch.get("drops", [])])),
         )
         await store.save_mapping(
-            merged, updated_by=f"agent:attempt-{state['heal_attempts'] + 1}"
+            merged,
+            updated_by=f"agent:attempt-{state['heal_attempts'] + 1}",
+            run_id=state.get("run_id"),
         )
     except Exception:
         # Persisting the patch failed (e.g. Postgres unreachable, or the

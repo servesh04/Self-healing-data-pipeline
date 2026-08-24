@@ -20,6 +20,7 @@ every request costs one metadata SELECT, not a real setup re-run.
 
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from langgraph.types import Command
@@ -27,16 +28,31 @@ from pydantic import BaseModel
 
 from auth import require_token
 from graph.state import RECURSION_LIMIT
-from services import checkpointer
+from services import checkpointer, store
 
 log = logging.getLogger(__name__)
+
+# The client (the dashboard's dataset picker) only knows the fault datasets
+# by name, not by any path meaningful on the server's filesystem — resolving
+# a bare filename here, server-side, is simpler than pushing filesystem
+# knowledge into the frontend or building a real upload flow neither Phase 5
+# nor the demo needs.
+DATA_SOURCES_DIR = Path(__file__).resolve().parents[2] / "data" / "sources"
+
+
+def _resolve_source_path(source_path: str) -> str:
+    candidate = Path(source_path)
+    if candidate.is_absolute() or candidate.exists():
+        return str(candidate)
+    return str(DATA_SOURCES_DIR / candidate.name)
 
 
 async def _ensure_checkpointer_ready() -> None:
     try:
         await checkpointer.setup_checkpointer()
+        await store.init_runs_table()  # same cold-start class; same fix
     except Exception:
-        log.exception("runs: checkpointer setup retry failed")
+        log.exception("runs: startup retry failed")
         raise HTTPException(status_code=503, detail="checkpoint store unavailable, try again")
 
 
@@ -110,7 +126,7 @@ async def _execute(graph_app, run_id: str, stream_input) -> None:
         log.exception("run %s: background execution failed", run_id)
 
 
-def _serialize_state(run_id: str, snapshot) -> dict:
+def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = None) -> dict:
     values = dict(snapshot.values) if snapshot.values else {}
 
     interrupts = [i.value for task in snapshot.tasks for i in task.interrupts]
@@ -128,6 +144,7 @@ def _serialize_state(run_id: str, snapshot) -> dict:
         "awaiting_approval": awaiting,
         "interrupt": interrupts[0] if interrupts else None,
         "next": list(snapshot.next),
+        "mapping_audit": mapping_audit or [],
         **values,
     }
 
@@ -139,8 +156,36 @@ async def trigger_run(
     graph_app=Depends(_graph_app),
 ) -> dict:
     run_id = str(uuid.uuid4())
-    background.add_task(_execute, graph_app, run_id, _blank_state(run_id, body.source_path))
+    source_path = _resolve_source_path(body.source_path)
+    await store.record_run(run_id, source_path)
+    background.add_task(_execute, graph_app, run_id, _blank_state(run_id, source_path))
     return {"run_id": run_id}
+
+
+@router.get("")
+async def list_runs(graph_app=Depends(_graph_app)) -> dict:
+    """Enumerates run_records (the lightweight index, not the checkpointer)
+    and asks the checkpointer for each one's live status. Fine at demo scale
+    (dozens of runs, not thousands) — always-fresh beats a second place for
+    status to go stale, and there is no listing API on the checkpointer
+    itself to fall back to.
+    """
+    records = await store.list_run_records()
+    runs = []
+    for record in records:
+        run_id = record["run_id"]
+        snapshot = await graph_app.aget_state({"configurable": {"thread_id": run_id}})
+        summary = _serialize_state(run_id, snapshot) if snapshot.values else {}
+        runs.append(
+            {
+                "run_id": run_id,
+                "source_path": record["source_path"],
+                "created_at": record["created_at"],
+                "api_status": summary.get("api_status", "unknown"),
+                "heal_attempts": summary.get("heal_attempts", 0),
+            }
+        )
+    return {"runs": runs}
 
 
 @router.get("/{run_id}")
@@ -148,7 +193,8 @@ async def get_run(run_id: str, graph_app=Depends(_graph_app)) -> dict:
     snapshot = await graph_app.aget_state({"configurable": {"thread_id": run_id}})
     if not snapshot.values:
         raise HTTPException(status_code=404, detail="run not found")
-    return _serialize_state(run_id, snapshot)
+    audit = await store.mapping_history_for_run(run_id)
+    return _serialize_state(run_id, snapshot, mapping_audit=audit)
 
 
 async def _resume(
