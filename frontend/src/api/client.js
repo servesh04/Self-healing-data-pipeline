@@ -82,3 +82,13 @@ export const getAnalyticsSummary = () => request('/api/analytics/summary')
 export const getAnalyticsConfidence = () => request('/api/analytics/confidence')
 export const getAnalyticsDriftDistribution = () => request('/api/analytics/drift_distribution')
 export const getAnalyticsSpecialistPerformance = () => request('/api/analytics/specialist_performance')
+
+// ── Read-only chat over run data ─────────────────────────────────────────
+// messages: [{role: 'user'|'assistant', content: string}]. Read-only —
+// there is no equivalent trigger/approve/reject call this can make.
+export const postRunChat = (runId, messages) =>
+  request(`/api/chat/${runId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages }),
+  })

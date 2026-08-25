@@ -6,6 +6,7 @@ import PatchDiff from '../components/PatchDiff/PatchDiff'
 import ApprovalPanel from '../components/ApprovalPanel/ApprovalPanel'
 import MappingAudit from '../components/MappingAudit/MappingAudit'
 import AttemptTimeline from '../components/AttemptTimeline/AttemptTimeline'
+import RunChat from '../components/RunChat/RunChat'
 import { runStatusChip } from '../lib/statusStyles'
 
 const PAGE_LABEL = { overview: 'Overview', runs: 'Runs', mapping: 'Mapping' }
@@ -76,6 +77,20 @@ export default function RunDetail() {
               </summary>
               <div className="border-t border-line p-3 pt-2">
                 <MappingAudit detail={detail} />
+              </div>
+            </details>
+          )}
+          {/* Read-only chat over this run's data — new feature, no
+              relation to the healing graph. Open by default: unlike
+              mapping audit (supplementary), this is the thing worth
+              surfacing immediately. */}
+          {detail && (
+            <details open className="rounded-lg border border-line bg-surface">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
+                Ask about this run
+              </summary>
+              <div className="border-t border-line p-3 pt-2">
+                <RunChat runId={runId} />
               </div>
             </details>
           )}

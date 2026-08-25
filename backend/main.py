@@ -25,7 +25,7 @@ import db
 from auth import require_token
 from config import Settings, get_settings
 from graph.build import build_graph
-from routers import analytics, config, runs
+from routers import analytics, chat, config, runs
 from services import analytics as analytics_service
 from services import checkpointer, store
 
@@ -122,6 +122,7 @@ app.add_middleware(
 app.include_router(runs.router)
 app.include_router(config.router)
 app.include_router(analytics.router)
+app.include_router(chat.router)
 
 
 # ── Unauthenticated ──────────────────────────────────────────────────────────
