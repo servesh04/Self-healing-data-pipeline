@@ -1,0 +1,10 @@
+# Test-only dependencies for tests/ (pytest suite). NOT part of the
+# deployed backend image -- backend/requirements.txt (what backend/Dockerfile
+# actually installs) stays production-only on purpose, so this suite adding
+# a dependency never changes what ships to Render.
+#
+# Install with: pip install -r backend/requirements.txt -r requirements-dev.txt
+
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-asyncio==1.4.0

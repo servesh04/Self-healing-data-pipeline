@@ -18,3 +18,12 @@ pandera==0.32.1
 
 # ── LLM: used from Phase 3 ───────────────────────────────────────────────
 groq==1.6.0
+
+# ── Observability: LangGraph auto-instruments every run once LANGSMITH_*
+# env vars are present (see .env.example / README "Observability"). Pinned
+# as an explicit dependency rather than left to arrive transitively via
+# langgraph/langchain-core, matching this file's own convention of pinning
+# everything actually relied upon. Opt-in and default-off: absent or
+# invalid credentials must never break a run (verified against day4_combo
+# both ways -- see README).
+langsmith==0.11.1

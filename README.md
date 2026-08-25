@@ -521,6 +521,155 @@ Then add the real Vercel origin to `CORS_ORIGINS` on Render and redeploy.
 
 ---
 
+## Testing
+
+`tests/` is an offline pytest suite — no network, no real LLM calls, no Neon. Run it with:
+
+```bash
+./.venv/Scripts/python.exe -m pip install -r backend/requirements.txt -r requirements-dev.txt
+./.venv/Scripts/python.exe -m pytest
+```
+
+**103 tests, ~6s, 71% coverage** on the modules this suite targets (`graph/`, `pipeline/`,
+`services/analytics.py`) — every individual module in that set lands between 70% and 100% except
+the graph nodes' own LLM/Postgres call sites, excluded on purpose (see below). Coverage is scoped
+via `pytest.ini`'s `--cov`; the number above is `pytest`'s own reported total, not a target.
+
+| File | Covers |
+|---|---|
+| `tests/conftest.py` | Fixtures: a `HealState` factory, fake `StateSnapshot`/graph-app doubles, and a stub-graph builder that monkeypatches `graph/build.py`'s 10 LLM/DB-backed node names, then compiles the **real** topology around them. |
+| `test_routing.py` | All 5 conditional-edge routers (`graph/routing.py`), parametrized — including the `confidence == 0.75` and `heal_attempts == MAX_HEAL_ATTEMPTS` boundaries. |
+| `test_graph_structure.py` | The compiled 13-node topology (all nodes present, the heal-cycle edge exists) and, by actually running the stub graph, the cycle/cap/history-reducer/interrupt-fork behavior — plus `graph/schemas.py`'s LLM-output validation. |
+| `test_serialization.py` | `routers/runs.py`'s `_serialize_state` — the state → API shape contract. |
+| `test_pipeline.py` | `pipeline.runner.run_pipeline` against all 6 real fault datasets in `data/sources/`, plus `MappingPatch`'s validators. |
+| `test_analytics.py` | `services/analytics.py`'s caching/coalescing/field-derivation, and `routers/analytics.py`'s aggregation math. |
+| `test_chat_context.py` | `services/chat_context.py`'s payload assembly, truncation, and token-cap logging. |
+| `test_regressions.py` | 5 real bugs found during this build, each pinned by a test that would fail against the old code. |
+
+**Regression tests** (`test_regressions.py`) are the file that distinguishes this suite from a
+coverage exercise — each one pins a bug that actually shipped and was actually found against real
+data, not a hypothetical:
+
+1. `_serialize_state` built its response with `**values` spread *after* the synthesized
+   `awaiting_approval` key, so `HealState`'s own permanently-`False` field silently overwrote the
+   live interrupt signal — `ApprovalPanel` had never rendered for a real interrupted run until the
+   spread order was fixed.
+2. A rejected run's empty `history` still needs `human_decision`/`proposed_patch`/`final_message`
+   populated alongside it — found when the read-only chat feature answered "why did this
+   escalate?" with no idea a human had ever reviewed anything.
+3. `drift_distribution` used to credit an attempt by its own `rerun_validate` result rather than
+   the run's final outcome: `day4_combo`'s rename attempt reports `result="failed"` (an unrelated
+   type drift was still present on that rerun) even though the run heals two attempts later —
+   crediting it that way told a false "most renames escalate" story.
+4. `mean_heal_attempts` divided by `drifted_runs` (which includes runs with 0 attempts, by
+   construction), producing a nonsensical sub-1.0 mean; the correct denominator is `attempted_runs`.
+5. `drift_distribution` counted a still-paused (`awaiting_approval`) run as escalated, purely
+   because it hadn't resolved yet, not because it had actually escalated.
+
+**Deliberate exclusion:**
+
+> LLM node behaviour is not unit-tested. Non-deterministic output means such tests
+> either flake or assert only that a mock was called. Model behaviour is measured instead by
+> eval/run_eval.py and the Phase 3 calibration sweep (25/25 across six datasets). Unit tests cover
+> deterministic logic: routing, graph structure, serialization contracts, pipeline validation,
+> analytics aggregation, and chat context assembly.
+
+Mocking the LLM to return a **fixed** value in order to test *this project's own* routing — e.g.
+"if `diagnose` returns `confidence=0.3`, does the compiled graph actually pause at
+`human_approval`?" (`test_graph_structure.py`'s `TestHumanApprovalFork`) — is used throughout this
+suite and is correct and expected: that tests this project's code, not the model's judgment.
+
+---
+
+## Observability (LangSmith)
+
+Optional, opt-in, default OFF. LangGraph auto-instruments every graph run once 3 real process
+environment variables are present — no code change anywhere reads them, not in `graph/nodes/**`,
+not even in `main.py`:
+
+| Var | Purpose |
+|---|---|
+| `LANGSMITH_TRACING` | `true` to enable; unset/`false`/anything else is a no-op. |
+| `LANGSMITH_API_KEY` | From https://smith.langchain.com/ (Settings → API Keys). |
+| `LANGSMITH_PROJECT` | Project name traces are grouped under. |
+
+**These must be real OS environment variables**, not just lines in `backend/.env` —
+`config.Settings` (pydantic-settings) only populates its own declared fields from `.env`; it never
+forwards arbitrary keys into `os.environ`, which is what LangSmith's SDK actually reads at trace
+time. On Render, set them as real dashboard env vars (same mechanism as `DATABASE_URL`/
+`SHARED_TOKEN`). For local dev, export them in the shell before `run_local.py`.
+
+Every run's `configurable.thread_id` (already `run_id` — routers/runs.py's `_execute` sets this
+for the checkpointer, unchanged) is what LangSmith groups a run's traces by; no separate metadata
+plumbing was added.
+
+**Verified, not assumed** — against a real LangSmith project, a real key, and (for the fail-safe
+checks) a deliberately invalid one:
+
+- **Opt-in / fail-safe.** Ran `day4_combo` through a real 2-attempt heal cycle three ways:
+  `LANGSMITH_TRACING` unset, and `true` with a deliberately invalid `LANGSMITH_API_KEY`. Both
+  completed normally (`status: "healed"`). The invalid-key run's log shows `langsmith.client`
+  logging `403 Forbidden` as a `WARNING` on every ingest attempt — the SDK swallows its own
+  network/auth errors rather than raising, so a bad or missing credential can't break a run.
+- **`day4_combo` shows the heal cycle iterating twice.** Queried the real trace via
+  `langsmith.Client().list_runs(...)` filtered by `thread_id`: `diagnose` → `spec_rename` →
+  `propose_patch` → `apply_patch` → `rerun_validate` → `diff_contract` (the loop-back), then
+  `diagnose` → `spec_type` → `propose_patch` → `apply_patch` → `rerun_validate` →
+  `commit_report` — the two specialists and the loop are directly visible in the trace tree, not
+  inferred from the app's own logs.
+- **`day6` shows the interrupt as a pause.** The trace tree shows `human_approval` completing with
+  `status: "interrupted"` inside the first `LangGraph` root span, and a *second* `LangGraph` root
+  span beginning at the resumed `human_approval` (now `status: "success"`) →
+  `route_after_human_approval` → `apply_patch` → `rerun_validate` → `commit_report`. LangGraph
+  traces the initial run and the resume as two separate root traces, not one continuous span; both
+  carry the same `thread_id` in their metadata, which is what makes them identifiable as the same
+  run.
+- **Per-node latency: populated.** Every node span carries a real, non-zero latency (e.g.
+  `diagnose` ≈ 0.9–1.9s, `apply_patch` ≈ 0.6s, `rerun_validate` ≈ 0.3–0.6s across samples).
+- **Per-node token counts: NOT populated — a real, structural gap, reported rather than papered
+  over.** Every traced span shows `prompt_tokens`/`completion_tokens`/`total_tokens` as `0`, and a
+  direct look at one `diagnose` run's child spans shows only `route_after_diagnose` — no child span
+  for the actual Groq call at all. Cause: `services/llm.py` calls `groq.AsyncGroq` directly, not a
+  LangChain-wrapped chat model (e.g. `langchain_groq.ChatGroq`); LangSmith's automatic token-usage
+  extraction only fires for the latter. LangGraph's auto-instrumentation traces the *graph
+  structure* (nodes and routers, as `chain`-type spans with real latency) — it does not retroactively
+  instrument an arbitrary raw HTTP call made inside a node. Fixing this would mean wrapping
+  `services/llm.py`'s Groq calls in a LangChain-compatible interface — a real code change to
+  something every node calls into, outside this task's "env-var configuration only, no code
+  changes" boundary, so it was reported here rather than fixed.
+- **Interrupt/resume latency: no meaningful difference, locally.** Timed `human_approval` →
+  `commit_report` (from the backend's own millisecond-precision node-fired log lines) for `day6`,
+  two samples each way: tracing on (3973ms, 3695ms; avg 3834ms) vs tracing off (3844ms, 3755ms; avg
+  3800ms). The ~1% gap is smaller than the run-to-run variance *within* either condition (each
+  touches Postgres and a real Neon round-trip), so this is noise, not a tracing cost — at this
+  sample size.
+- **Deployed backend (Render): tracing confirmed active, no breakage — but not an apples-to-apples
+  latency delta.** With the 3 vars set as real Render dashboard env vars, triggered `day6` against
+  the live deployed backend; the resulting trace on LangSmith shows the identical
+  interrupt/resume shape (`human_approval` → `status: "interrupted"`, then a second root span
+  resuming through `apply_patch`/`rerun_validate`/`commit_report`), confirming tracing is genuinely
+  active there, not just configured. The resumed root span's own recorded latency was 191ms — far
+  faster than local's ~4s, almost certainly because Render and Neon share the same region (`ohio`/
+  `us-east-2`, per render.yaml) while this local machine reaches Neon over a much longer real
+  network path; that's a deployment topology difference, not a tracing effect. A naive HTTP-polling
+  measurement from this environment (curl round-trip: 3514ms) is dominated by that same network
+  path plus 1s polling granularity, not by graph execution time — LangSmith's own root-span timing
+  is the trustworthy number here. Toggling tracing off *on Render itself* to get a true controlled
+  delta wasn't done — it would need another env var round-trip and redeploy, and Render's own
+  cold-start/scaling variance would likely swamp a tracing-sized effect anyway. The controlled,
+  apples-to-apples comparison (same environment, only the env var changed) remains the local one
+  above; what's confirmed here is that tracing doesn't break or perceptibly slow down interrupt/
+  resume on the actual deployed target, which is the risk this check exists to catch.
+
+Local verification used a disposable `PIPELINE_ENV=langsmith-verification` namespace, fully wiped
+afterward via `scripts/reset_seed_data.py langsmith-verification`. The deployed check triggered one
+real run against the live backend's own (already test-touched, 11-run) default namespace — its
+checkpoint/run-record/mapping-audit rows were deleted immediately after, and `/api/analytics/
+summary` was confirmed to read back the exact pre-test numbers on both that namespace and the
+separate, untouched `dashboard-demo` seed data.
+
+---
+
 ## Known limitations
 
 Stated explicitly per ARCHITECTURE.md's Phase 6 instructions — this section earns marks, it does
