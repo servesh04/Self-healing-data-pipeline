@@ -47,7 +47,14 @@ export async function probeAuthRejection() {
 }
 
 // ── Phase 5: runs + config ───────────────────────────────────────────────
-export const listRuns = () => request('/api/runs')
+export const listRuns = ({ limit, status, dataset } = {}) => {
+  const params = new URLSearchParams()
+  if (limit) params.set('limit', limit)
+  if (status) params.set('status', status)
+  if (dataset) params.set('dataset', dataset)
+  const qs = params.toString()
+  return request(`/api/runs${qs ? `?${qs}` : ''}`)
+}
 export const triggerRun = (sourcePath) =>
   request('/api/runs', {
     method: 'POST',
@@ -68,3 +75,10 @@ export const rejectRun = (runId, note) =>
     body: JSON.stringify({ note: note ?? null }),
   })
 export const getCurrentMapping = () => request('/api/config/mapping')
+export const getMappingHistory = (limit = 50) => request(`/api/config/mapping/history?limit=${limit}`)
+
+// ── DASHBOARD.md: read-only analytics ───────────────────────────────────
+export const getAnalyticsSummary = () => request('/api/analytics/summary')
+export const getAnalyticsConfidence = () => request('/api/analytics/confidence')
+export const getAnalyticsDriftDistribution = () => request('/api/analytics/drift_distribution')
+export const getAnalyticsSpecialistPerformance = () => request('/api/analytics/specialist_performance')

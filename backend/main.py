@@ -25,7 +25,8 @@ import db
 from auth import require_token
 from config import Settings, get_settings
 from graph.build import build_graph
-from routers import config, runs
+from routers import analytics, config, runs
+from services import analytics as analytics_service
 from services import checkpointer, store
 
 logging.basicConfig(
@@ -85,6 +86,16 @@ async def lifespan(app: FastAPI):
     app.state.graph_app = build_graph(checkpointer.get_checkpointer())
     log.info("startup: graph compiled")
 
+    # Fire-and-forget, not awaited: the ~8-9s walk of every checkpoint
+    # (services/analytics.py) is real Postgres round-trip cost, not
+    # something to make Render's health check -- and therefore every cold
+    # start -- wait on. Reference kept on app.state so the task survives
+    # past this function returning; without a live reference the event loop
+    # is free to garbage-collect a still-pending task.
+    app.state.analytics_warmup = asyncio.create_task(
+        analytics_service.warm_cache(app.state.graph_app)
+    )
+
     try:
         yield
     finally:
@@ -110,6 +121,7 @@ app.add_middleware(
 
 app.include_router(runs.router)
 app.include_router(config.router)
+app.include_router(analytics.router)
 
 
 # ── Unauthenticated ──────────────────────────────────────────────────────────

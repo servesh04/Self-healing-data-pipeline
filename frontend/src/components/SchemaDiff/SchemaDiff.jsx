@@ -1,16 +1,4 @@
-const STATUS_STYLE = {
-  missing: 'border-red-700 bg-red-950/60 text-red-300',
-  unexpected: 'border-amber-600 bg-amber-950/60 text-amber-300',
-  mismatch: 'border-orange-600 bg-orange-950/60 text-orange-300',
-  matching: 'border-emerald-700 bg-emerald-950/40 text-emerald-300',
-}
-
-const STATUS_LABEL = {
-  missing: 'missing',
-  unexpected: 'unexpected',
-  mismatch: 'type mismatch',
-  matching: 'matching',
-}
+import { SCHEMA_STATUS_STYLE, SCHEMA_STATUS_LABEL } from '../../lib/statusStyles'
 
 export default function SchemaDiff({ detail }) {
   if (!detail) return null
@@ -23,11 +11,11 @@ export default function SchemaDiff({ detail }) {
 
   if (columns.length === 0) {
     return (
-      <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-3">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+      <div className="rounded-lg border border-line bg-surface p-3">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
           Schema diff
         </h3>
-        <p className="text-xs text-neutral-600">no schema observed yet</p>
+        <p className="text-xs text-ink-faint">no schema observed yet</p>
       </div>
     )
   }
@@ -44,14 +32,14 @@ export default function SchemaDiff({ detail }) {
   })
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-3">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+    <div className="rounded-lg border border-line bg-surface p-3">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
         Schema diff
       </h3>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[420px] font-mono text-xs">
           <thead>
-            <tr className="text-neutral-500">
+            <tr className="text-ink-muted">
               <th className="pb-1 text-left font-normal">column</th>
               <th className="pb-1 text-left font-normal">expected</th>
               <th className="pb-1 text-left font-normal">actual</th>
@@ -60,13 +48,13 @@ export default function SchemaDiff({ detail }) {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.col} className="border-t border-neutral-900">
-                <td className="py-1 pr-2 text-neutral-300">{r.col}</td>
-                <td className="py-1 pr-2 text-neutral-500">{r.expectedType}</td>
-                <td className="py-1 pr-2 text-neutral-500">{r.actualType}</td>
+              <tr key={r.col} className="border-t border-line">
+                <td className="py-1 pr-2 text-ink">{r.col}</td>
+                <td className="py-1 pr-2 text-ink-muted">{r.expectedType}</td>
+                <td className="py-1 pr-2 text-ink-muted">{r.actualType}</td>
                 <td className="py-1">
-                  <span className={`rounded border px-1.5 py-0.5 ${STATUS_STYLE[r.status]}`}>
-                    {STATUS_LABEL[r.status]}
+                  <span className={`rounded border px-1.5 py-0.5 ${SCHEMA_STATUS_STYLE[r.status]}`}>
+                    {SCHEMA_STATUS_LABEL[r.status]}
                   </span>
                 </td>
               </tr>

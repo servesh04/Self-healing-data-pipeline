@@ -22,3 +22,10 @@ services:
         sync: false
       - key: APP_ENV
         value: render
+      - key: GROQ_API_KEY
+        sync: false
+      # Dashboard demo namespace (DASHBOARD.md Step 0) — isolates seeded/demo
+      # run history from the 'default' namespace other verification scripts
+      # assume is untouched. Not a secret, so no sync:false.
+      - key: PIPELINE_ENV
+        value: dashboard-demo

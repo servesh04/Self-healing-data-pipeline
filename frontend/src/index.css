@@ -1,6 +1,64 @@
 @import "tailwindcss";
 
-/* Dark theme is the project default (ARCHITECTURE.md → Dashboard). */
+/* ── Design tokens ───────────────────────────────────────────────────────
+   Warm, editorial dark palette — intentionally never pure black or a cool
+   blue-black. `canvas` is the page ground; `surface`/`surface-raised` are
+   card/panel layers sitting on top of it. `signal` (amber) is reserved for
+   the heal cycle and anything needing human attention — used sparingly, not
+   as a general highlight color. */
 :root {
   color-scheme: dark;
+
+  --canvas: #12110f;
+  --surface: #1a1917;
+  --surface-raised: #211f1c;
+  --border: #2e2b27;
+  --border-strong: #423e38;
+
+  --text: #f0ede8;
+  --text-muted: #a39d93;
+  --text-faint: #6e6860;
+
+  --signal: #e0a458;
+  --signal-dim: #8a6533;
+
+  --pass: #6e9182;
+  --fail: #c05e4a;
+  --running: #7a93a8;
+  --idle: #3a3733;
+}
+
+/* Tailwind v4 is CSS-first: alias the tokens above into the `--color-*` /
+   `--font-*` namespaces Tailwind actually reads, so `bg-canvas`,
+   `text-ink-muted`, `border-line`, `font-display`, etc. become real
+   utilities usable everywhere. `text`→`ink` and `border`→`line` are renamed
+   only here, to avoid the `text-text` / `border-border` utility names
+   Tailwind would otherwise generate — the source variable names and values
+   above are untouched. */
+@theme {
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+
+  --color-ink: var(--text);
+  --color-ink-muted: var(--text-muted);
+  --color-ink-faint: var(--text-faint);
+
+  --color-signal: var(--signal);
+  --color-signal-dim: var(--signal-dim);
+
+  --color-pass: var(--pass);
+  --color-fail: var(--fail);
+  --color-running: var(--running);
+  --color-idle: var(--idle);
+}
+
+html,
+body {
+  background: var(--canvas);
 }

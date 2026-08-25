@@ -88,14 +88,14 @@ export default function GraphCanvas({ detail }) {
   const loopGeom = edgeGeometry(loopEdge)
 
   return (
-    <div className="gc-root rounded-lg border border-neutral-800 bg-neutral-950 p-3">
+    <div className="gc-root rounded-lg border border-line bg-surface p-3">
       <style>{`
         :root {
-          --gc-idle-fill: #171717; --gc-idle-stroke: #3f3f46; --gc-idle-text: #737373;
-          --gc-done-fill: #052e1a; --gc-done-stroke: #22c55e; --gc-done-text: #86efac;
-          --gc-active-fill: #422006; --gc-active-stroke: #f59e0b; --gc-active-text: #fde68a;
-          --gc-edge: #52525b; --gc-edge-active: #22c55e; --gc-loop: #f59e0b;
-          --gc-label: #a1a1aa;
+          --gc-idle-fill: var(--color-surface); --gc-idle-stroke: var(--color-line-strong); --gc-idle-text: var(--color-ink-faint);
+          --gc-done-fill: color-mix(in srgb, var(--color-pass) 18%, var(--color-surface)); --gc-done-stroke: var(--color-pass); --gc-done-text: var(--color-pass);
+          --gc-active-fill: color-mix(in srgb, var(--color-signal) 22%, var(--color-surface)); --gc-active-stroke: var(--color-signal); --gc-active-text: var(--color-signal);
+          --gc-edge: var(--color-line-strong); --gc-edge-active: var(--color-pass); --gc-loop: var(--color-signal);
+          --gc-label: var(--color-ink-faint);
         }
         .gc-node-active rect { animation: gcPulse 1.4s ease-in-out infinite; }
         @keyframes gcPulse {
@@ -145,7 +145,6 @@ export default function GraphCanvas({ detail }) {
                   y={geom.labelY}
                   fill="var(--gc-label)"
                   fontSize="11"
-                  fontFamily="monospace"
                   textAnchor="middle"
                   className="select-none"
                 >
@@ -179,7 +178,6 @@ export default function GraphCanvas({ detail }) {
                 y={NODE_H / 2 + 4}
                 fill={style.text}
                 fontSize="12.5"
-                fontFamily="monospace"
                 fontWeight={status === 'idle' ? 400 : 600}
                 textAnchor="middle"
                 className="select-none"
@@ -199,8 +197,8 @@ export default function GraphCanvas({ detail }) {
               width={144}
               height={40}
               rx={20}
-              fill="#f59e0b"
-              stroke="#78350f"
+              fill="var(--color-signal)"
+              stroke="var(--color-signal-dim)"
               strokeWidth={2}
             />
             <text
@@ -208,9 +206,8 @@ export default function GraphCanvas({ detail }) {
               y={6}
               textAnchor="middle"
               fontSize="16"
-              fontWeight="800"
-              fontFamily="monospace"
-              fill="#1c1006"
+              fontWeight="700"
+              fill="var(--color-canvas)"
             >
               {'↺'} Heal attempt {healAttempts}
             </text>
@@ -218,18 +215,18 @@ export default function GraphCanvas({ detail }) {
         )}
       </svg>
 
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-neutral-500">
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-ink-muted">
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full border border-neutral-600 bg-neutral-800" /> idle
+          <span className="inline-block h-2.5 w-2.5 rounded-full border border-line-strong bg-surface-raised" /> idle
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full border border-emerald-500 bg-emerald-950" /> visited
+          <span className="inline-block h-2.5 w-2.5 rounded-full border border-pass bg-pass/20" /> visited
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-full border border-amber-500 bg-amber-950" /> paused here
+          <span className="inline-block h-2.5 w-2.5 rounded-full border border-signal bg-signal/20" /> paused here
         </span>
-        <span className="ml-auto italic">
-          node status reflects the polled snapshot (1s interval) — not a live per-node stream
+        <span className="ml-auto italic text-ink-faint">
+          node status reflects the polled snapshot (2s interval) — not a live per-node stream
         </span>
       </div>
     </div>

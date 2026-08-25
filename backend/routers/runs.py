@@ -22,13 +22,14 @@ import logging
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from langgraph.types import Command
 from pydantic import BaseModel
 
 from auth import require_token
 from graph.state import RECURSION_LIMIT
 from services import checkpointer, store
+from services.analytics import collect_run_summaries
 
 log = logging.getLogger(__name__)
 
@@ -138,14 +139,24 @@ def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = N
     # interrupts) is the authoritative source for that instead.
     api_status = "awaiting_approval" if awaiting else values.get("status", "running")
 
+    # `**values` MUST come first: HealState carries its own `awaiting_approval`
+    # field (set False in _blank_state, never updated by any node while
+    # actually paused — human_approval never returns until resumed), which
+    # collides by name with the synthesized key below. Spreading `values`
+    # last silently let that stale False win over the live, correct one —
+    # found 2026-08-25 via a seed script whose polling loop, which reads this
+    # exact field, could never detect a real interrupt. Since ApprovalPanel's
+    # entire visibility check is `detail?.awaiting_approval`, this also meant
+    # the human-approval UI panel had never actually appeared for a real
+    # interrupted run, in this project's history, until this line changed.
     return {
+        **values,
         "run_id": run_id,
         "api_status": api_status,
         "awaiting_approval": awaiting,
         "interrupt": interrupts[0] if interrupts else None,
         "next": list(snapshot.next),
         "mapping_audit": mapping_audit or [],
-        **values,
     }
 
 
@@ -163,29 +174,50 @@ async def trigger_run(
 
 
 @router.get("")
-async def list_runs(graph_app=Depends(_graph_app)) -> dict:
+async def list_runs(
+    graph_app=Depends(_graph_app),
+    limit: int = Query(50, ge=1, le=500),
+    status: str | None = Query(None, description="filter: clean/healed/escalated/awaiting_approval/running"),
+    dataset: str | None = Query(None, description="filter: dataset filename, e.g. day4_combo.csv"),
+) -> dict:
     """Enumerates run_records (the lightweight index, not the checkpointer)
-    and asks the checkpointer for each one's live status. Fine at demo scale
+    via collect_run_summaries — the same checkpointer-backed aggregation the
+    /api/analytics/* endpoints use (see services/analytics.py) — and returns
+    a lean per-run projection rather than full HealState. Fine at demo scale
     (dozens of runs, not thousands) — always-fresh beats a second place for
     status to go stale, and there is no listing API on the checkpointer
     itself to fall back to.
+
+    Filters and `limit` apply after aggregation, not in SQL: status and
+    dataset are both derived fields (status can reflect a live interrupt;
+    dataset is the source_path's basename), not raw columns to filter on.
     """
-    records = await store.list_run_records()
-    runs = []
-    for record in records:
-        run_id = record["run_id"]
-        snapshot = await graph_app.aget_state({"configurable": {"thread_id": run_id}})
-        summary = _serialize_state(run_id, snapshot) if snapshot.values else {}
-        runs.append(
+    runs = await collect_run_summaries(graph_app)
+    if status:
+        runs = [r for r in runs if r["status"] == status]
+    if dataset:
+        runs = [r for r in runs if r["dataset"] == dataset]
+    runs.sort(key=lambda r: r["created_at"], reverse=True)
+    runs = runs[:limit]
+
+    return {
+        "runs": [
             {
-                "run_id": run_id,
-                "source_path": record["source_path"],
-                "created_at": record["created_at"],
-                "api_status": summary.get("api_status", "unknown"),
-                "heal_attempts": summary.get("heal_attempts", 0),
+                "run_id": r["run_id"],
+                "dataset": r["dataset"],
+                "source_path": r["source_path"],
+                "status": r["status"],
+                "api_status": r["status"],  # kept alongside `status` for any existing caller
+                "drift_class": r["drift_class"],
+                "heal_attempts": r["heal_attempts"],
+                "final_confidence": r["final_confidence"],
+                "approved_by": r["approved_by"],
+                "duration_ms": r["duration_ms"],
+                "created_at": r["created_at"],
             }
-        )
-    return {"runs": runs}
+            for r in runs
+        ]
+    }
 
 
 @router.get("/{run_id}")

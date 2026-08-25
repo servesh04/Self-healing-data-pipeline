@@ -36,17 +36,17 @@ export default function PatchDiff({ detail }) {
   const isHigh = confidence != null && confidence >= 0.75
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-3">
+    <div className="rounded-lg border border-line bg-surface p-3">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
           {showingApplied ? 'Applied patch' : 'Proposed patch'}
         </h3>
         {confidence != null && (
           <span
             className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
               isHigh
-                ? 'border-emerald-600 bg-emerald-950/60 text-emerald-300'
-                : 'border-amber-600 bg-amber-950/60 text-amber-300'
+                ? 'border-pass bg-pass/15 text-pass'
+                : 'border-signal bg-signal/15 text-signal'
             }`}
           >
             confidence {confidence.toFixed(2)}
@@ -62,27 +62,27 @@ export default function PatchDiff({ detail }) {
           : detail.drift_class
         return (
           driftClass && (
-            <p className="mb-2 font-mono text-[11px] text-neutral-500">
-              drift_class: <span className="text-neutral-300">{driftClass}</span>
+            <p className="mb-2 font-mono text-[11px] text-ink-muted">
+              drift_class: <span className="text-ink">{driftClass}</span>
             </p>
           )
         )
       })()}
 
       {lines.length > 0 ? (
-        <pre className="overflow-x-auto rounded border border-neutral-800 bg-black px-3 py-2 font-mono text-xs leading-relaxed">
+        <pre className="overflow-x-auto rounded border border-line bg-canvas px-3 py-2 font-mono text-xs leading-relaxed">
           {lines.map((line, i) => (
-            <div key={i} className="text-emerald-400">
+            <div key={i} className="text-pass">
               + {line}
             </div>
           ))}
         </pre>
       ) : (
-        <p className="text-xs text-neutral-600">no patch proposed</p>
+        <p className="text-xs text-ink-faint">no patch proposed</p>
       )}
 
       {detail.patch_rationale && (
-        <p className="mt-2 border-l-2 border-neutral-700 pl-2 text-xs italic text-neutral-400">
+        <p className="mt-2 border-l-2 border-line-strong pl-2 text-xs italic text-ink-muted">
           {detail.patch_rationale}
         </p>
       )}

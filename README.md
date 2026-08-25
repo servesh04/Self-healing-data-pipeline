@@ -21,7 +21,7 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 | **3** | Real nodes (LLM) | **done — tuned and verified against a real model, all 6 fault datasets** |
 | **4** | Interrupt + Postgres checkpointer | **done — verified across a real process kill and restart, both approve and reject** |
 | **5** | Dashboard | **done — hand-rolled SVG GraphCanvas, verified against 5 real run states** |
-| 6 | Eval, docs, freeze | not started |
+| 6 | Eval, docs, freeze | **in progress — topology export and docs done; eval and demo rehearsal blocked mid-sweep on Groq's daily token budget, auto-retrying (see below)** |
 
 Phase 0 contains **no pipeline code and no LangGraph usage** by design. `langgraph` is installed
 and its version recorded, but nothing imports it yet. Phase 1 adds the deterministic pipeline,
@@ -327,6 +327,50 @@ consistent auto-heal behavior was already exhaustively verified against a fresh 
 
 ---
 
+## Phase 6 — eval, docs, freeze
+
+### Graph topology
+
+![Graph topology](docs/graph.png)
+
+Generated directly from the real, compiled graph — `build_graph(...).get_graph().draw_mermaid_png()`
+— not hand-drawn. This is a verification artifact as much as a diagram: it's LangGraph's own view
+of the 13 nodes and every edge (solid = fixed, dotted = conditional) actually wired in
+`backend/graph/build.py`, so it can't silently drift from the code the way a hand-maintained
+diagram could. Matches ARCHITECTURE.md's "Graph Topology" ASCII diagram edge-for-edge.
+
+### Eval
+
+`eval/run_eval.py` runs all 6 fault datasets twice — baseline (healing disabled, the seed mapping
+straight off disk, no Postgres, no LLM) and the real, complete graph (auto-approving any patch
+that reaches `human_approval`, since only `day6_ambiguous_rename` is expected to land there —
+`day5_unfixable` diagnoses as `unknown` and escalates directly, so there's nothing to
+auto-approve for it). Each full-graph dataset run gets its own isolated Postgres `pipeline_env`
+namespace (`eval-fullgraph-<dataset>`) so one dataset's healing patches can never contaminate the
+next dataset's starting mapping — the graph's own nodes have no per-call override for this, so the
+script achieves it by setting `PIPELINE_ENV` and clearing `config.get_settings`'s cache before
+each dataset, the same isolation goal `scripts/check_pipeline.py` established in Phase 1, adapted
+to a mechanism the graph nodes actually respect.
+
+**Currently blocked mid-sweep by Groq's daily token budget** — see
+[docs/eval_summary.md](docs/eval_summary.md) for the live status and the partial results already
+confirmed today (`day1_clean`, `day2_renamed`, `day5_unfixable`). A background job is polling Groq
+with realistic-sized probe requests and will re-run the eval automatically once the budget
+recovers enough for a full, uninterrupted sweep; this section and the summary doc will be updated
+with the completed table before feature freeze.
+
+### Demo script rehearsal
+
+Same blocker applies here: steps 2-4 of Appendix C's demo script (`day2`, `day4`, `day6`) each
+need a real, successful `diagnose` call, so rehearsal of those steps is deferred to the same
+window as the eval rerun above. Steps 1 (`day1_clean`, no LLM call at all) and 5
+(`day5_unfixable`) don't depend on it — `day5`'s real classification is `unknown` anyway, so
+today's quota-forced `unknown`/`escalate` default happens to land on the same outcome a
+successful call would have produced, and both were exercised live during Phase 5's dashboard
+verification.
+
+---
+
 ## Recorded versions
 
 Verified against the installed packages, not against documentation.
@@ -430,14 +474,16 @@ docker run --rm -p 8199:10000 -e PORT=10000 \
 | `GET /health` | none | Liveness. Deliberately does **not** touch the DB, so a suspended Neon compute cannot make the deploy look unhealthy. |
 | `GET /` | none | Service banner. |
 | `GET /api/ping` | Bearer | Authenticated round-trip. Writes a row to `deploy_probe` and reports the Postgres version plus recorded package versions. (Phase 0) |
-| `POST /api/runs` | Bearer | `{source_path}` → `{run_id}`. Runs the graph in a background task; poll rather than WebSocket. (Phase 4) |
-| `GET /api/runs/{id}` | Bearer | Full `HealState`, plus `api_status`/`awaiting_approval` synthesized from the checkpointer's own pause state. (Phase 4) |
+| `POST /api/runs` | Bearer | `{source_path}` → `{run_id}`. Runs the graph in a background task; poll rather than WebSocket. Bare dataset filenames are resolved against `data/sources/`. (Phase 4) |
+| `GET /api/runs` | Bearer | Lists `run_records`, enriched with each run's live checkpointer status (`aget_state`, one call per run — see Known Limitations). (Phase 5) |
+| `GET /api/runs/{id}` | Bearer | Full `HealState`, plus `api_status`/`awaiting_approval` synthesized from the checkpointer's own pause state, and `mapping_audit` — the per-run patch history. (Phase 4; `mapping_audit` added Phase 5) |
 | `POST /api/runs/{id}/approve` | Bearer | `{note?}` → resumes from `human_approval`, not `START`. (Phase 4) |
 | `POST /api/runs/{id}/reject` | Bearer | `{note?}` → resumes and routes to `escalate`; `apply_patch` never fires. (Phase 4) |
+| `GET /api/config/mapping` | Bearer | The current mapping in the app's namespace. (Phase 5) |
 
 All `/api/*` routes require `Authorization: Bearer <SHARED_TOKEN>`; anything else returns 401.
-Upload and run-listing (`POST /api/sources/upload`, `GET /api/runs`) are Phase 5 dashboard
-concerns and not yet built.
+There is no file-upload endpoint — the dashboard's dataset picker only offers the 6 fault
+datasets already shipped in `data/sources/`.
 
 ---
 
@@ -477,6 +523,33 @@ Then add the real Vercel origin to `CORS_ORIGINS` on Render and redeploy.
 
 ## Known limitations
 
+Stated explicitly per ARCHITECTURE.md's Phase 6 instructions — this section earns marks, it does
+not lose them.
+
+- **Trigger-based, not scheduled.** A run starts on `POST /api/runs`; there is no cron, no
+  Airflow/Dagster/Prefect DAG, no polling of an upstream source for new files. A production
+  deployment of this pattern would sit behind a real scheduler; this project deliberately doesn't
+  build one (see ARCHITECTURE.md's guardrails on not adding orchestration tooling for its own sake).
+- **Two drift classes auto-heal reliably; the nullability specialist is partial.** `rename` and
+  `type` are exercised and calibrated against real fault data (`day2`/`day3`/`day4`); no fault
+  dataset in this build exercises `spec_nullability` end-to-end the way the other two are, so its
+  registry-checked `null_policy` patches are implemented and validated but not equivalently proven
+  against a real drift case.
+- **Patches config, not transform code — a deliberate safety boundary.** The agent can only ever
+  emit a `MappingPatch` fragment (renames/casts/null_policy/drops), validated against a
+  `extra="forbid"` Pydantic model with registry-checked op names before it's ever persisted. It
+  cannot write or execute arbitrary Python, by construction, not by prompting convention.
+- **Polling, not streaming transport.** The dashboard polls `GET /api/runs/{id}` every 2s; there
+  is no WebSocket/SSE push. `next` reports precisely where an interrupt paused, but GraphCanvas's
+  "visited" node coloring is reconstructed from the polled `HealState` snapshot and `history`, not
+  a live per-node execution event — there is no such stream to draw it from.
+- **6 hand-authored fault datasets, not a standard benchmark.** Each was written to exercise one
+  specific, understood failure mode (a clean rename, a type-cast drift, a combination, a
+  non-mechanical unfixable case, and a right-class/low-confidence case) — this proves the
+  mechanism handles the failure modes it was designed for, not general robustness against
+  arbitrary real-world drift.
+- **Render free-tier cold starts.** The backend sleeps after ~15 minutes idle and takes ~50s to
+  wake; a live demo should warm it (`GET /api/ping`) a minute beforehand.
 - `VITE_SHARED_TOKEN` is inlined into the client bundle, so the shared token is public to anyone
   who loads the page. This is inherent to the single-shared-token design in ARCHITECTURE.md
   (no user accounts, no JWT) and is acceptable only for a demo deployment.
@@ -485,7 +558,9 @@ Then add the real Vercel origin to `CORS_ORIGINS` on Render and redeploy.
   serializing lock plus a Neon round-trip, so list latency grows linearly with run count. Not
   optimized (e.g. caching terminal-status runs) since the demo never approaches a scale where it
   matters.
-- GraphCanvas's node coloring is inferred from the polled snapshot (which nodes were visited,
-  ever), not a live per-node execution stream — REST polling has no such stream to show. This
-  matches ARCHITECTURE.md's own "poll rather than WebSocket... note SSE as a known limitation".
-- Further limitations are recorded per phase as the build proceeds.
+- **Groq's free-tier daily token budget (200,000 TPD) is a real, observed constraint on this
+  project**, not just a theoretical one — it was hit twice during the build (Phase 5's live
+  dashboard testing, and again during Phase 6's eval run), each time correctly triggering
+  retry-with-backoff and then graceful degradation to `unknown`/escalate rather than a crash or a
+  wrong guess. Anyone re-running this project's eval or demo on the free tier the same day as
+  heavy manual testing should expect the same throttling.

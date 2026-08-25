@@ -23,8 +23,8 @@ export default function AssertionBars({ detail }) {
   const rows = [...CONTRACT_COLUMNS, ...extraColumns]
 
   return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-950 p-3">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+    <div className="rounded-lg border border-line bg-surface p-3">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
         Assertions
       </h3>
       <div className="space-y-1.5">
@@ -33,15 +33,15 @@ export default function AssertionBars({ detail }) {
           const passed = !fails
           return (
             <div key={col} className="flex items-center gap-2 font-mono text-xs">
-              <span className="w-28 shrink-0 truncate text-neutral-400">{col}</span>
+              <span className="w-28 shrink-0 truncate text-ink-muted">{col}</span>
               <div
                 className={`h-5 flex-1 rounded transition-colors duration-500 ${
-                  passed ? 'bg-emerald-900/60 border border-emerald-600' : 'bg-red-950 border border-red-700'
+                  passed ? 'bg-pass/20 border border-pass' : 'bg-fail/15 border border-fail'
                 }`}
               >
                 <div
                   className={`flex h-full items-center px-2 text-[11px] ${
-                    passed ? 'text-emerald-300' : 'text-red-300'
+                    passed ? 'text-pass' : 'text-fail'
                   }`}
                 >
                   {passed
