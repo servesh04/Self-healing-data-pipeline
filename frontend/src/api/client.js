@@ -92,3 +92,28 @@ export const postRunChat = (runId, messages) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages }),
   })
+
+// Global scope's context is ~5x a single run's (aggregates + every run's
+// lean record), which occasionally pushes a request past Groq's per-minute
+// budget when called back-to-back — found while verifying this against
+// real seeded data: the backend's LLM call has a hardcoded 30s timeout
+// (services/llm.py, outside this feature's file boundary to change) and
+// can genuinely exceed it under that transient pressure, surfacing as a
+// 503. One quiet retry here is cheap insurance against that specific,
+// observed failure mode — not a generic "retry everything" policy.
+export const postGlobalChat = async (messages) => {
+  try {
+    return await request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'global', messages }),
+    })
+  } catch (err) {
+    if (err.status !== 503) throw err
+    return request('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'global', messages }),
+    })
+  }
+}

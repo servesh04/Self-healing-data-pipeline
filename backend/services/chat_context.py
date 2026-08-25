@@ -26,6 +26,8 @@ import json
 import logging
 from pathlib import Path
 
+from services.analytics import collect_run_summaries
+
 log = logging.getLogger(__name__)
 
 # Cap + budget knobs. No tokenizer dependency for a check that only needs to
@@ -141,20 +143,86 @@ async def build_run_context(run_id: str, graph_app) -> dict | None:
     return context
 
 
-# ── Global scope — NOT built yet ────────────────────────────────────────────
-# Per-run ships first and gets verified against real seeded data before this
-# is written (explicit build order for this feature). When it is:
+# ── Global scope ─────────────────────────────────────────────────────────
+# Shipped after per-run was built, verified against real seeded data AND
+# the deployed backend (explicit build order for this feature).
 #
-#   - Reuse routers.analytics's summary/drift_distribution/
-#     specialist_performance/confidence functions directly (call them with
-#     an explicit graph_app= argument — they're plain async functions
-#     underneath the @router.get decorator, so Depends(...)'s sentinel
-#     default is simply overridden) rather than recomputing anything.
-#   - Aggregates are ALWAYS included; per-run detail (lean run records) is
-#     filterable by status/dataset, so a question like "summarize the last
-#     20 runs" doesn't need every run's full history to answer honestly.
-#   - This design breaks down somewhere around 200+ runs (context would
-#     stop fitting comfortably even with aggregates-only + lean records).
-#     The fix at that point is filtering per-run detail more aggressively
-#     while keeping aggregates complete — not retrieval. Not built now;
-#     this repo's seeded dataset is 20 runs.
+# Reuses routers.analytics's summary/drift_distribution/
+# specialist_performance/confidence functions directly (called with an
+# explicit graph_app= argument — they're plain async functions underneath
+# the @router.get decorator, so Depends(...)'s sentinel default is simply
+# overridden) rather than recomputing anything. This is a service importing
+# from a router, backwards from the usual layering — accepted deliberately
+# rather than moving that aggregation logic to avoid touching routers/
+# analytics.py at all, which is outside this feature's "new files only"
+# boundary. The alternative (reimplementing the same aggregation here) would
+# create a second place for the exact counting bugs this feature exists to
+# prevent to diverge from the dashboard's own numbers.
+from routers.analytics import (  # noqa: E402
+    confidence as analytics_confidence,
+    drift_distribution as analytics_drift_distribution,
+    specialist_performance as analytics_specialist_performance,
+    summary as analytics_summary,
+)
+
+
+def _lean_run(r: dict) -> dict:
+    created_at = r.get("created_at")
+    return {
+        "run_id": r["run_id"],
+        "dataset": r["dataset"],
+        "status": r["status"],
+        "drift_class": r["drift_class"],
+        "heal_attempts": r["heal_attempts"],
+        "final_confidence": r["final_confidence"],
+        "approved_by": r["approved_by"],
+        "duration_ms": r["duration_ms"],
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
+    }
+
+
+async def build_global_context(
+    graph_app,
+    pipeline_env: str | None = None,
+    status: str | None = None,
+    dataset: str | None = None,
+) -> dict:
+    """Aggregates ALWAYS included in full — they're the anti-hallucination
+    strategy for every counting/rate question. Per-run detail (the `runs`
+    list) is a LEAN projection (no history — that granularity already lives
+    in confidence_rows), and filterable by status/dataset so a narrower
+    question doesn't need every run's detail to answer honestly.
+
+    This design breaks down somewhere around 200+ runs (context stops
+    fitting comfortably even at aggregates + lean records). The fix at that
+    point is filtering per-run detail more aggressively while keeping
+    aggregates complete -- not retrieval. Not built now; this repo's seeded
+    dataset is 20 runs.
+    """
+    summary = await analytics_summary(graph_app=graph_app, pipeline_env=pipeline_env)
+    drift_dist = await analytics_drift_distribution(graph_app=graph_app, pipeline_env=pipeline_env)
+    spec_perf = await analytics_specialist_performance(graph_app=graph_app, pipeline_env=pipeline_env)
+    conf_rows = await analytics_confidence(graph_app=graph_app, pipeline_env=pipeline_env)
+
+    runs = await collect_run_summaries(graph_app, pipeline_env)
+    if status:
+        runs = [r for r in runs if r["status"] == status]
+    if dataset:
+        runs = [r for r in runs if r["dataset"] == dataset]
+    runs.sort(key=lambda r: r["created_at"] or "", reverse=True)
+
+    context = {
+        "summary": summary,
+        "drift_distribution": drift_dist,
+        "specialist_performance": spec_perf,
+        "confidence_rows": conf_rows,
+        "runs": [_lean_run(r) for r in runs],
+    }
+
+    tokens = estimate_tokens(context)
+    if tokens > MAX_CONTEXT_TOKENS:
+        log.warning(
+            "chat_context: global context estimated at %d tokens (cap %d)",
+            tokens, MAX_CONTEXT_TOKENS,
+        )
+    return context

@@ -1,4 +1,5 @@
-"""POST /api/chat/{run_id} — read-only chat over one run's data.
+"""POST /api/chat/{run_id} (per-run) and POST /api/chat (global) — read-only
+chat over run data.
 
 HARD BOUNDARY (new feature — read this before changing anything here):
 this is a single LLM call with assembled context, NOT a LangGraph graph.
@@ -12,12 +13,12 @@ backend/pipeline/**; the graph doesn't know this feature exists.
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth import require_token
-from prompts.prompts import CHAT_SYSTEM, CHAT_USER_TEMPLATE
-from services.chat_context import build_run_context, estimate_tokens
+from prompts.prompts import CHAT_SYSTEM_GLOBAL, CHAT_SYSTEM_PER_RUN, CHAT_USER_TEMPLATE
+from services.chat_context import build_global_context, build_run_context, estimate_tokens
 from services.llm import LLMError, call_json
 
 log = logging.getLogger(__name__)
@@ -68,27 +69,20 @@ def _normalize_llm_json(raw) -> list[dict]:
     return []
 
 
-@router.post("/{run_id}")
-async def chat_about_run(
-    run_id: str, body: ChatRequest, graph_app=Depends(_graph_app)
-) -> dict:
-    if not body.messages or body.messages[-1].role != "user":
-        raise HTTPException(status_code=400, detail="last message must be from the user")
-
-    context = await build_run_context(run_id, graph_app)
-    if context is None:
-        raise HTTPException(status_code=404, detail="run not found")
-
+async def _ask(system_prompt: str, context: dict, messages: list[ChatMessage]) -> dict:
+    """Shared by both endpoints: format the prompt, call the LLM, validate
+    the {"reply": ...} shape, return {"reply", "tokens_used"}.
+    """
     context_json = json.dumps(context, indent=2)
     user_prompt = CHAT_USER_TEMPLATE.format(
         context_json=context_json,
-        transcript=_transcript(body.messages),
+        transcript=_transcript(messages),
     )
 
     try:
-        raw = await call_json(CHAT_SYSTEM, user_prompt, temperature=0.2)
+        raw = await call_json(system_prompt, user_prompt, temperature=0.2)
     except LLMError as exc:
-        log.exception("chat: LLM call failed for run %s", run_id)
+        log.exception("chat: LLM call failed")
         raise HTTPException(
             status_code=503, detail=f"chat is temporarily unavailable: {exc}"
         ) from exc
@@ -105,8 +99,36 @@ async def chat_about_run(
         # estimates the context budget -- an approximation, not a metered
         # count, and documented as such here rather than silently implied
         # to be exact.
-        tokens_used = estimate_tokens(CHAT_SYSTEM) + estimate_tokens(user_prompt) + estimate_tokens(parsed.reply)
+        tokens_used = estimate_tokens(system_prompt) + estimate_tokens(user_prompt) + estimate_tokens(parsed.reply)
         return {"reply": parsed.reply, "tokens_used": tokens_used}
 
-    log.error("chat: no valid {reply: ...} candidate in LLM output for run %s: %r", run_id, raw)
+    log.error("chat: no valid {reply: ...} candidate in LLM output: %r", raw)
     raise HTTPException(status_code=502, detail="chat model returned an unexpected response shape")
+
+
+@router.post("/{run_id}")
+async def chat_about_run(
+    run_id: str, body: ChatRequest, graph_app=Depends(_graph_app)
+) -> dict:
+    if not body.messages or body.messages[-1].role != "user":
+        raise HTTPException(status_code=400, detail="last message must be from the user")
+
+    context = await build_run_context(run_id, graph_app)
+    if context is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    return await _ask(CHAT_SYSTEM_PER_RUN, context, body.messages)
+
+
+@router.post("")
+async def chat_global(
+    body: ChatRequest,
+    graph_app=Depends(_graph_app),
+    status: str | None = Query(None, description="filter run records by status"),
+    dataset: str | None = Query(None, description="filter run records by dataset filename"),
+) -> dict:
+    if not body.messages or body.messages[-1].role != "user":
+        raise HTTPException(status_code=400, detail="last message must be from the user")
+
+    context = await build_global_context(graph_app, status=status, dataset=dataset)
+    return await _ask(CHAT_SYSTEM_GLOBAL, context, body.messages)

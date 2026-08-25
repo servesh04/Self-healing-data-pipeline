@@ -5,6 +5,7 @@ import RunsTable from '../components/RunsTable/RunsTable'
 import ConfidenceChart from '../components/ConfidenceChart/ConfidenceChart'
 import DriftDistribution from '../components/DriftDistribution/DriftDistribution'
 import SpecialistPerformance from '../components/SpecialistPerformance/SpecialistPerformance'
+import GlobalChat from '../components/GlobalChat/GlobalChat'
 
 // "The system's behaviour at rest" (DASHBOARD.md) — an aggregate snapshot,
 // not a live single-run view, so this fetches once per visit rather than
@@ -49,6 +50,19 @@ export default function Overview() {
       </div>
 
       <SpecialistPerformance data={analytics.specialistPerformance} />
+
+      {/* Read-only chat over all-run data — new feature, no relation to the
+          healing graph. Placed below Specialist Performance per the feature
+          spec's frontend requirements. Open by default, same as per-run's
+          panel on RunDetail. */}
+      <details open className="rounded-lg border border-line bg-surface">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">
+          Ask about the pipeline
+        </summary>
+        <div className="border-t border-line p-3 pt-2">
+          <GlobalChat />
+        </div>
+      </details>
     </div>
   )
 }
