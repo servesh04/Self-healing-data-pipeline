@@ -18,11 +18,17 @@ function CustomTooltip({ active, payload, label }) {
 export default function SpecialistPerformance({ data }) {
   // A truly zero-width bar gives Recharts nowhere sensible to anchor its
   // LabelList (position="right" silently fails to render at all) — a
-  // negligible sliver (invisible at this chart width) keeps "no data"
-  // visible for a zero-attempt specialist instead of it vanishing.
+  // negligible sliver (invisible at this chart width) keeps the label
+  // visible instead of the row vanishing. `?? 0.004` alone only catches
+  // success_rate === null (the zero-attempt case); a specialist with a
+  // genuine 0% success rate (attempts > 0, 0 passed) is ALSO exactly 0 and
+  // hits the same zero-width bug, but silently, since 0 is not null — found
+  // on real deployed data (spec_rename, 1 attempt, 0 passed) where the
+  // "0/1" label simply never rendered, indistinguishable from the row not
+  // existing. Both zero cases need the sliver, not just the no-data one.
   const rows = data.map((d) => ({
     ...d,
-    display_rate: d.success_rate ?? 0.004,
+    display_rate: d.success_rate || 0.004,
     count_label: d.attempts === 0 ? 'no data' : `${d.passed}/${d.attempts}`,
   }))
 
