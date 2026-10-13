@@ -96,6 +96,55 @@ async def get_current_mapping(pipeline_env: str | None = None) -> MappingPatch:
     return seed
 
 
+async def get_current_mapping_version(pipeline_env: str | None = None) -> tuple[MappingPatch, int]:
+    """Read the current snapshot and its ID for a guarded write."""
+    env = _env(pipeline_env)
+    await get_current_mapping(env)
+    async with get_pool().connection() as conn:
+        cur = await conn.execute(
+            "select id, mapping from mapping_state where pipeline_env = %s order by id desc limit 1",
+            (env,),
+        )
+        row = await cur.fetchone()
+    return MappingPatch.model_validate(row["mapping"]), row["id"]
+
+
+async def get_mapping_by_version(version_id: int, pipeline_env: str | None = None) -> MappingPatch:
+    env = _env(pipeline_env)
+    async with get_pool().connection() as conn:
+        cur = await conn.execute(
+            "select mapping from mapping_state where pipeline_env = %s and id = %s",
+            (env, version_id),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise ValueError(f"mapping version {version_id} not found")
+    return MappingPatch.model_validate(row["mapping"])
+
+
+async def save_mapping_cas(mapping: MappingPatch, expected_id: int, updated_by: str,
+                           run_id: str | None = None, pipeline_env: str | None = None) -> int:
+    """Append one snapshot only while the version read by this run is current."""
+    env = _env(pipeline_env)
+    validated = MappingPatch.model_validate(mapping)
+    async with get_pool().connection() as conn:
+        async with conn.transaction():
+            await conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (env,))
+            cur = await conn.execute(
+                "select id from mapping_state where pipeline_env = %s order by id desc limit 1",
+                (env,),
+            )
+            row = await cur.fetchone()
+            if row is None or row["id"] != expected_id:
+                raise ValueError("mapping changed since this run read it")
+            cur = await conn.execute(
+                "insert into mapping_state (mapping, updated_by, pipeline_env, run_id) "
+                "values (%s, %s, %s, %s) returning id",
+                (Json(validated.model_dump()), updated_by, env, run_id),
+            )
+            return (await cur.fetchone())["id"]
+
+
 async def save_mapping(
     mapping: MappingPatch,
     updated_by: str,
@@ -108,11 +157,13 @@ async def save_mapping(
     env = _env(pipeline_env)
     validated = MappingPatch.model_validate(mapping)
     async with get_pool().connection() as conn:
-        await conn.execute(
-            "insert into mapping_state (mapping, updated_by, pipeline_env, run_id) "
-            "values (%s, %s, %s, %s)",
-            (Json(validated.model_dump()), updated_by, env, run_id),
-        )
+        async with conn.transaction():
+            await conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (env,))
+            await conn.execute(
+                "insert into mapping_state (mapping, updated_by, pipeline_env, run_id) "
+                "values (%s, %s, %s, %s)",
+                (Json(validated.model_dump()), updated_by, env, run_id),
+            )
     return validated
 
 

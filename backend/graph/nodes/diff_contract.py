@@ -44,7 +44,8 @@ _CHECK_KIND_MAP = {
     "column_in_dataframe": "missing_column",
     "column_in_schema": "unexpected_column",
     "not_nullable": "null_violation",
-    "field_uniqueness": "value_violation",
+    "field_uniqueness": "unique",
+    "row_count_min": "row_count",
 }
 
 
@@ -54,8 +55,10 @@ def _kind_for(check: str) -> str:
     if check.startswith("dtype("):
         return "dtype_mismatch"
     if check.startswith("isin("):
-        return "value_violation"
-    return "value_violation"  # fallback for e.g. greater_than_or_equal_to(...)
+        return "enum_value"
+    if check.startswith("greater_than_or_equal_to("):
+        return "minimum"
+    return "unknown"
 
 
 def _is_dtype_cascade_artifact(detail: dict) -> bool:
@@ -84,12 +87,16 @@ def diff_contract(state: dict) -> dict:
         expected = (
             "(not declared in contract)"
             if kind == "unexpected_column"
+            else contract.allowed_values.get(column) if kind == "enum_value"
             else contract.expected_dtypes.get(column, d["check"])
         )
 
         drift_items.append(
             {
                 "kind": kind,
+                "finding_id": f"{column}:{d['check']}",
+                "check": d["check"],
+                "failure_count": d.get("failure_count", 0),
                 "column": column,
                 "expected": str(expected),
                 "actual": d["check"],

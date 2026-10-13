@@ -13,6 +13,7 @@ other LLM node — first valid one wins, no confidence field here either.
 """
 
 import logging
+import re
 
 from pydantic import ValidationError
 
@@ -22,9 +23,38 @@ from services.llm import LLMError, call_json
 
 log = logging.getLogger(__name__)
 
+RENAME_REVIEW_CAP = 0.4
+
+
+def _obvious_rename(source: str, target: str) -> bool:
+    """Require a meaningful shared token/stem before trusting rename confidence."""
+    source_tokens = re.findall(r"[A-Za-z]+", source.casefold())
+    target_tokens = re.findall(r"[A-Za-z]+", target.casefold())
+    return any(len(a) >= 4 and len(b) >= 4 and a[:4] == b[:4]
+               for a in source_tokens for b in target_tokens)
+
 
 async def propose_patch(state: dict) -> dict:
     patch = state.get("specialist_output") or {}
+    if state.get("proposal_error"):
+        return {"proposed_patch": None, "patch_rationale": state["proposal_error"]}
+    if not patch or not any(patch.values()):
+        return {"proposed_patch": None, "proposal_error": "specialist returned an empty patch"}
+    if not state.get("components"):
+        candidate = (state.get("candidates") or [{}])[0]
+        components = [{**candidate, "specialist": f"spec_{state.get('drift_class')}", "patch": patch}]
+    else:
+        components = state["components"]
+    components = [dict(component) for component in components]
+    for component in components:
+        if component.get("drift_class") != "rename":
+            continue
+        renames = component.get("patch", {}).get("renames", {})
+        if any(not _obvious_rename(source, target) for source, target in renames.items()):
+            component["confidence"] = min(component.get("confidence", 0.0), RENAME_REVIEW_CAP)
+            component["safety_status"] = "review: weak lexical rename match"
+    confidence = min(state.get("confidence") or 0.0,
+                     *(component.get("confidence", 0.0) for component in components))
     user_prompt = PROPOSE_PATCH_USER_TEMPLATE.format(
         diagnosis=state.get("diagnosis") or "",
         drift_class=state.get("drift_class") or "",
@@ -46,4 +76,6 @@ async def propose_patch(state: dict) -> dict:
     return {
         "proposed_patch": patch,
         "patch_rationale": rationale,
+        "components": components,
+        "confidence": confidence,
     }

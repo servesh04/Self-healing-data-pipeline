@@ -7,6 +7,8 @@ never raise" guardrail.
 """
 
 import logging
+import hashlib
+from pathlib import Path
 
 from pipeline.contract import load_contract
 from pipeline.runner import run_pipeline as run_the_pipeline
@@ -17,9 +19,12 @@ log = logging.getLogger(__name__)
 
 async def run_pipeline(state: dict) -> dict:
     try:
-        mapping = await store.get_current_mapping()
+        mapping, mapping_version = await store.get_current_mapping_version()
         contract = load_contract()
+        source_hash = hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest()
         result = run_the_pipeline(state["source_path"], mapping, contract)
+        if hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest() != source_hash:
+            raise ValueError("source changed during initial validation")
     except Exception as exc:
         log.exception("run_pipeline node failed before reaching the pipeline")
         return {
@@ -31,6 +36,9 @@ async def run_pipeline(state: dict) -> dict:
         }
 
     return {
+        "mapping_version_read": mapping_version,
+        "source_sha256": source_hash,
+        "mapping_version_written": None,
         "assertions_passed": result.passed,
         "assertion_failures": result.as_strings(),
         "assertion_failure_details": [

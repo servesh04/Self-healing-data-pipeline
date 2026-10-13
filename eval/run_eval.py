@@ -1,6 +1,6 @@
 """Phase 6 eval (ARCHITECTURE.md, "## Eval").
 
-Runs all 6 fault datasets twice:
+Runs the P0 fixture matrix twice:
 
 - **Baseline** — healing disabled. Plain `pipeline.runner.run_pipeline`
   against the seed mapping (`config/mapping.yaml`), read directly off disk.
@@ -98,11 +98,21 @@ DATASETS = [
     ("day3_type_drift.csv", "day3_type_drift", "revenue as comma-formatted string", "fail",
         {"status": "healed", "heal_attempts": 1, "auto_approved": False}),
     ("day4_combo.csv", "day4_combo", "rename + type drift together", "fail",
-        {"status": "healed", "heal_attempts": 2, "auto_approved": False}),
+        {"status": "healed", "heal_attempts": 1, "auto_approved": False}),
     ("day5_unfixable.csv", "day5_unfixable", "two unrelated, non-mechanical drifts", "fail",
         {"status": "escalated", "heal_attempts": 0, "auto_approved": False}),
     ("day6_ambiguous_rename.csv", "day6_ambiguous_rename", "ambiguous rename", "fail",
         {"status": "healed", "heal_attempts": 1, "auto_approved": True}),
+    ("day7_value_drift.csv", "day7_value_drift", "N/S/E/W categorical labels", "fail",
+        {"status": "healed", "heal_attempts": 1, "auto_approved": False}),
+    ("day7_mixed.csv", "day7_mixed", "rename + type + value", "fail",
+        {"status": "healed", "heal_attempts": 1, "auto_approved": False}),
+    ("negative_new_category.csv", "negative_new_category", "new business category", "fail",
+        {"status": "escalated", "heal_attempts": 0, "auto_approved": False}),
+    ("negative_minimum.csv", "negative_minimum", "numeric minimum violation", "fail",
+        {"status": "escalated", "heal_attempts": 0, "auto_approved": False}),
+    ("negative_unique.csv", "negative_unique", "uniqueness violation", "fail",
+        {"status": "escalated", "heal_attempts": 0, "auto_approved": False}),
 ]
 
 
@@ -137,6 +147,14 @@ def _blank_state(run_id: str, source_path: str) -> dict:
         "assertion_failure_details": [],
         "source_profile": {},
         "specialist_output": None,
+        "specialist_outputs": None,
+        "candidates": [],
+        "components": [],
+        "mapping_version_read": None,
+        "mapping_version_written": None,
+        "source_sha256": None,
+        "patch_error": None,
+        "proposal_error": None,
     }
 
 
@@ -151,11 +169,12 @@ def run_baseline(filename: str) -> dict:
         "rows_in": result.rows_in,
         "rows_out": result.rows_out,
         "failures": result.as_strings(),
+        "failure_ids": [f"{f.column}:{f.check}" for f in result.failures],
     }
 
 
 async def run_full_graph(filename: str, label: str) -> dict:
-    env = f"{EVAL_ENV_PREFIX}{label}"
+    env = f"{EVAL_ENV_PREFIX}{label}-{uuid.uuid4().hex[:8]}"
     os.environ["PIPELINE_ENV"] = env
     app_config.get_settings.cache_clear()  # force Settings() to re-read PIPELINE_ENV
 
@@ -180,6 +199,7 @@ async def run_full_graph(filename: str, label: str) -> dict:
         break
 
     values = snapshot.values
+    mapping, version = await store.get_current_mapping_version()
     return {
         "status": values.get("status"),
         "heal_attempts": values.get("heal_attempts", 0),
@@ -190,6 +210,11 @@ async def run_full_graph(filename: str, label: str) -> dict:
         "auto_approved": auto_approved,
         "node_sequence": node_sequence,
         "history": values.get("history", []),
+        "final_mapping": mapping.model_dump(),
+        "final_mapping_version": version,
+        "final_failure_ids": [f"{f['column']}:{f['check']}"
+                              for f in values.get("assertion_failure_details", [])],
+        "human_decision": values.get("human_decision"),
     }
 
 
@@ -212,7 +237,7 @@ async def main() -> int:
     await store.init_mapping_table()
 
     print("=" * 78)
-    print("PHASE 6 EVAL — baseline vs. full graph, all 6 fault datasets")
+    print(f"P0 EVAL — baseline vs. full graph, {len(DATASETS)} datasets")
     print("=" * 78)
 
     rows = []
@@ -259,6 +284,10 @@ async def main() -> int:
             "outcome": _outcome_label(agent),
             "raw_baseline": baseline,
             "raw_agent": agent,
+            "failure_delta": {
+                "resolved": sorted(set(baseline["failure_ids"]) - set(agent["final_failure_ids"])),
+                "introduced": sorted(set(agent["final_failure_ids"]) - set(baseline["failure_ids"])),
+            },
         })
 
         time.sleep(PACE_SECONDS)  # Groq free-tier pacing between full-graph runs
@@ -285,20 +314,18 @@ async def main() -> int:
 
 
 def _write_summary_md(rows: list[dict]) -> None:
-    n_healed = sum(1 for r in rows if r["agent_status"] == "healed")
     n_escalated = sum(1 for r in rows if r["agent_status"] == "escalated")
     n_baseline_fail = sum(1 for r in rows if r["baseline"] == "fail")
+    n_unattended = sum(1 for r in rows if r["agent_status"] == "healed"
+                       and not r["raw_agent"]["auto_approved"])
+    n_reviewed = sum(1 for r in rows if r["raw_agent"]["auto_approved"])
 
     lines = [
         "# Eval Summary",
         "",
-        "Generated by `eval/run_eval.py` (ARCHITECTURE.md, \"## Eval\"). Baseline runs the "
-        "pipeline once with healing disabled; the agent column runs the real, compiled graph "
-        "end to end, auto-approving any patch that reaches `human_approval` (day5_unfixable "
-        "never reaches it — its diagnosis is `unknown`, which routes straight to `escalate`, "
-        "so there is nothing to auto-approve there; this deviation from a real human-in-the-loop "
-        "review is deliberate — the interrupt/resume mechanism itself is verified manually, "
-        "against a real process restart, in Phase 4).",
+        "Generated by `eval/run_eval.py`. Baseline runs once with the seed mapping. "
+        "The graph run uses an isolated mapping namespace per fixture and evaluation. "
+        "Low-confidence proposals are auto-approved only for this eval and are reported separately.",
         "",
         "| Dataset | Fault | Baseline | Agent | Heal attempts | Outcome |",
         "|---|---|---|---|---|---|",
@@ -314,15 +341,11 @@ def _write_summary_md(rows: list[dict]) -> None:
 
     lines += [
         "",
-        f"**Headline:** *\"{n_healed} of {len(rows)} injected faults resolved fully "
-        f"unattended; a 5th was correctly identified, proposed a real patch, and healed once "
-        f"approved; the 6th was correctly escalated with no patch proposed at all, rather "
-        f"than mis-patched. The baseline pipeline failed on {n_baseline_fail} of "
-        f"{len(rows) - 1} drift cases.\"*",
+        f"**Measured:** {n_unattended} unattended heals, {n_reviewed} eval auto-approval{'s' if n_reviewed != 1 else ''}, "
+        f"{n_escalated} escalations, {n_baseline_fail} baseline failures across {len(rows)} fixtures.",
         "",
-        "**The escalation is a success, not a failure.** `day5_unfixable` injects two "
-        "unrelated, non-mechanical drifts — there is no config patch that fixes both, and the "
-        "agent says so rather than guessing. An agent that knows its limits is the point.",
+        "Raw results include baseline and final failure IDs, exact proposal, mapping snapshot, "
+        "attempts, components, and approval decisions for each fixture.",
         "",
         "Raw per-dataset output: `eval/results/eval_results.json`.",
         "",

@@ -38,6 +38,13 @@ def normalize_llm_json(raw: dict | list) -> list[dict]:
 from pipeline.mapping import CAST_REGISTRY, NULL_POLICY_REGISTRY
 
 
+class FixCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    drift_class: str = Field(pattern="^(rename|type|nullability|value)$")
+    finding_ids: list[str] = Field(min_length=1)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class DiagnoseOutput(BaseModel):
     """diagnose's output. `confidence` calibration is the entire escalation
     story — see prompts.py's DIAGNOSE_PROMPT and the explicit instruction to
@@ -46,9 +53,10 @@ class DiagnoseOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    drift_class: str = Field(pattern="^(rename|type|nullability|unknown)$")
+    drift_class: str = Field(pattern="^(rename|type|nullability|value|mixed|unknown)$")
     diagnosis: str
     confidence: float = Field(ge=0.0, le=1.0)
+    candidates: list[FixCandidate] = []
 
 
 class RenameSpecialistOutput(BaseModel):
@@ -96,12 +104,18 @@ class NullabilitySpecialistOutput(BaseModel):
         return v
 
 
+class ValueSpecialistOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value_maps: dict[str, dict[str, str]] = {}
+
+
 # drift_class -> the specialist output model that must validate its raw
 # output before propose_patch (or anything else) ever touches it.
 SPECIALIST_SCHEMAS: dict[str, type[BaseModel]] = {
     "rename": RenameSpecialistOutput,
     "type": TypeSpecialistOutput,
     "nullability": NullabilitySpecialistOutput,
+    "value": ValueSpecialistOutput,
 }
 
 

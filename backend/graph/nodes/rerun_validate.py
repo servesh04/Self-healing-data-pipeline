@@ -10,6 +10,8 @@ here would break that.
 """
 
 import logging
+import hashlib
+from pathlib import Path
 
 from pipeline.contract import load_contract
 from pipeline.runner import run_pipeline as run_the_pipeline
@@ -20,16 +22,22 @@ log = logging.getLogger(__name__)
 
 async def rerun_validate(state: dict) -> dict:
     try:
-        mapping = await store.get_current_mapping()
+        if hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest() != state.get("source_sha256"):
+            raise ValueError("source changed since preflight")
+        mapping = await store.get_mapping_by_version(state["mapping_version_written"])
         contract = load_contract()
         result = run_the_pipeline(state["source_path"], mapping, contract)
+        if hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest() != state.get("source_sha256"):
+            raise ValueError("source changed during rerun")
     except Exception as exc:
         log.exception("rerun_validate node failed before reaching the pipeline")
         failure_strs = [f"{type(exc).__name__}: {exc}"]
         attempt = {
             "attempt_no": state["heal_attempts"],
             "drift_summary": state.get("diagnosis") or "",
-            "specialist": f"spec_{state.get('drift_class')}",
+            "specialist": "+".join(c["specialist"] for c in state.get("components") or []),
+            "components": state.get("components") or [],
+            "mapping_version": state.get("mapping_version_written"),
             "patch": state.get("applied_patch") or {},
             "confidence": state.get("confidence") or 0.0,
             "approved_by": "human" if state.get("human_decision") else "auto",
@@ -46,7 +54,9 @@ async def rerun_validate(state: dict) -> dict:
     attempt = {
         "attempt_no": state["heal_attempts"],
         "drift_summary": state.get("diagnosis") or "",
-        "specialist": f"spec_{state.get('drift_class')}",
+        "specialist": "+".join(c["specialist"] for c in state.get("components") or []),
+        "components": state.get("components") or [],
+        "mapping_version": state.get("mapping_version_written"),
         "patch": state.get("applied_patch") or {},
         "confidence": state.get("confidence") or 0.0,
         "approved_by": "human" if state.get("human_decision") else "auto",

@@ -7,4 +7,6 @@ export const DATASETS = [
   { file: 'day4_combo.csv', label: 'day4 — combo (the cycle)' },
   { file: 'day5_unfixable.csv', label: 'day5 — unfixable (escalates)' },
   { file: 'day6_ambiguous_rename.csv', label: 'day6 — ambiguous (human review)' },
+  { file: 'day7_value_drift.csv', label: 'day7 — categorical value drift' },
+  { file: 'day7_mixed.csv', label: 'day7 — rename, type and value drift' },
 ]

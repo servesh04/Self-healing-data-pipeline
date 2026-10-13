@@ -22,18 +22,26 @@ def route_after_run(state: HealState) -> str:
 
 
 def route_after_diagnose(state: HealState) -> str:
-    if state["drift_class"] in ("rename", "type", "nullability"):
+    if state.get("drift_class") == "unknown" or not state.get("candidates"):
+        return "escalate"
+    if len(state["candidates"]) > 1:
+        return "multi_specialist"
+    if state["drift_class"] in ("rename", "type", "nullability", "value"):
         return f"spec_{state['drift_class']}"
     return "escalate"
 
 
 def route_after_confidence(state: HealState) -> str:
+    if state.get("proposal_error") or not state.get("proposed_patch"):
+        return "escalate"
     if (state["confidence"] or 0.0) >= CONFIDENCE_THRESHOLD:
         return "apply_patch"
     return "human_approval"
 
 
 def route_after_rerun(state: HealState) -> str:
+    if state.get("patch_error"):
+        return "escalate"
     if state["assertions_passed"]:
         return "commit_report"
     if state["heal_attempts"] >= MAX_HEAL_ATTEMPTS:

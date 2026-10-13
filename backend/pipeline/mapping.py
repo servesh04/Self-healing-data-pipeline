@@ -19,6 +19,8 @@ from typing import Callable
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from pipeline.contract import load_contract
+
 # ── Cast registry ────────────────────────────────────────────────────────────
 # Each op takes the raw column and returns a coerced one. Unparseable values
 # become NaN (via errors="coerce") rather than raising — a cast is allowed to
@@ -65,6 +67,19 @@ class MappingPatch(BaseModel):
     casts: dict[str, str] = {}
     null_policy: dict[str, str] = {}
     drops: list[str] = []
+    value_maps: dict[str, dict[str, str]] = {}
+
+    @field_validator("value_maps")
+    @classmethod
+    def _valid_value_maps(cls, value_maps: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+        allowed = load_contract().allowed_values
+        for column, replacements in value_maps.items():
+            if column not in allowed or not replacements:
+                raise ValueError(f"value map requires an allowed-value column: {column}")
+            for source, target in replacements.items():
+                if source in allowed[column] or target not in allowed[column] or source == target:
+                    raise ValueError(f"invalid value map {column}: {source} -> {target}")
+        return value_maps
 
     @field_validator("casts")
     @classmethod

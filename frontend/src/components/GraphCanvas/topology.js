@@ -18,6 +18,8 @@ export const NODES = [
   { id: 'spec_rename', label: 'spec_rename', x: 260, y: 420, kind: 'llm' },
   { id: 'spec_type', label: 'spec_type', x: 500, y: 420, kind: 'llm' },
   { id: 'spec_nullability', label: 'spec_nullability', x: 740, y: 420, kind: 'llm' },
+  { id: 'spec_value', label: 'spec_value', x: 160, y: 510, kind: 'llm' },
+  { id: 'multi_specialist', label: 'multi_specialist', x: 840, y: 510, kind: 'llm' },
   { id: 'propose_patch', label: 'propose_patch', x: 500, y: 510, kind: 'llm' },
   { id: 'human_approval', label: 'human_approval', x: 760, y: 600, kind: 'gate' },
   { id: 'apply_patch', label: 'apply_patch', x: 500, y: 600, kind: 'process' },
@@ -37,10 +39,15 @@ export const EDGES = [
   { from: 'diagnose', to: 'spec_rename', type: 'straight' },
   { from: 'diagnose', to: 'spec_type', type: 'straight' },
   { from: 'diagnose', to: 'spec_nullability', type: 'straight' },
+  { from: 'diagnose', to: 'spec_value', type: 'straight' },
+  { from: 'diagnose', to: 'multi_specialist', type: 'straight' },
   { from: 'diagnose', to: 'escalate', type: 'curve', label: 'unknown', side: 'right' },
   { from: 'spec_rename', to: 'propose_patch', type: 'straight' },
   { from: 'spec_type', to: 'propose_patch', type: 'straight' },
   { from: 'spec_nullability', to: 'propose_patch', type: 'straight' },
+  { from: 'spec_value', to: 'propose_patch', type: 'straight' },
+  { from: 'multi_specialist', to: 'propose_patch', type: 'straight' },
+  { from: 'apply_patch', to: 'escalate', type: 'curve', label: 'failed preflight', side: 'right' },
   { from: 'propose_patch', to: 'apply_patch', type: 'straight', label: 'high' },
   { from: 'propose_patch', to: 'human_approval', type: 'straight', label: 'low' },
   { from: 'human_approval', to: 'apply_patch', type: 'straight', label: 'approve' },
@@ -72,9 +79,14 @@ export function deriveVisited(detail) {
   }
   if (detail.drift_class) {
     visited.add('diagnose')
-    if (['rename', 'type', 'nullability'].includes(detail.drift_class)) {
+    if (['rename', 'type', 'nullability', 'value'].includes(detail.drift_class)) {
       visited.add(`spec_${detail.drift_class}`)
       visited.add('propose_patch')
+    }
+    if (detail.drift_class === 'mixed') {
+      visited.add('multi_specialist')
+      visited.add('propose_patch')
+      for (const component of detail.components || []) visited.add(component.specialist)
     }
   }
   if (detail.heal_attempts > 0 || detail.applied_patch) {

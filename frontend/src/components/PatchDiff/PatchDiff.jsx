@@ -1,4 +1,4 @@
-const SECTION_LABEL = { renames: 'renames', casts: 'casts', null_policy: 'null_policy', drops: 'drops' }
+const SECTION_LABEL = { renames: 'renames', casts: 'casts', null_policy: 'null_policy', drops: 'drops', value_maps: 'value_maps' }
 
 function diffLines(patch) {
   if (!patch) return []
@@ -11,7 +11,11 @@ function diffLines(patch) {
       for (const item of value) lines.push(`${SECTION_LABEL[section] ?? section}: - ${item}`)
     } else {
       for (const [k, v] of Object.entries(value)) {
-        lines.push(`${SECTION_LABEL[section] ?? section}: ${k} → ${v}`)
+        if (section === 'value_maps') {
+          for (const [source, target] of Object.entries(v)) lines.push(`value_maps: ${k}.${source} → ${target}`)
+        } else {
+          lines.push(`${SECTION_LABEL[section] ?? section}: ${k} → ${v}`)
+        }
       }
     }
   }
@@ -58,7 +62,7 @@ export default function PatchDiff({ detail }) {
         // Same staleness issue as confidence above: prefer the class implied
         // by the history entry this patch actually came from.
         const driftClass = showingApplied
-          ? (lastHistoryEntry?.specialist?.replace('spec_', '') ?? detail.drift_class)
+          ? (lastHistoryEntry?.specialist ?? detail.drift_class)
           : detail.drift_class
         return (
           driftClass && (
@@ -84,6 +88,11 @@ export default function PatchDiff({ detail }) {
       {detail.patch_rationale && (
         <p className="mt-2 border-l-2 border-line-strong pl-2 text-xs italic text-ink-muted">
           {detail.patch_rationale}
+        </p>
+      )}
+      {detail.components?.length > 0 && (
+        <p className="mt-2 font-mono text-[11px] text-ink-muted">
+          {detail.components.map((c) => `${c.specialist}: ${c.confidence?.toFixed?.(2) ?? c.confidence}${c.safety_status ? ` (${c.safety_status})` : ''}`).join(' · ')}
         </p>
       )}
     </div>

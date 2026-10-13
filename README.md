@@ -1,5 +1,7 @@
 # Self-Healing Data Pipeline
 
+> P0 expansion: categorical `N/S/E/W` region repair and atomic combined patches are implemented and verified. The 13 October 2026 live database and LLM evaluation passed 11/11 fixtures; see `docs/eval_summary.md` and `docs/expansion-review-and-implementation-plan.md`. The original phase-by-phase results below predate P0.
+
 > Existing tools — Great Expectations, Monte Carlo, dbt tests — *detect* data drift and alert.
 > A human still writes the patch. This agent closes the remaining loop: it diagnoses the drift,
 > proposes a remediation patch, and escalates to a human when confidence is low rather than

@@ -13,6 +13,18 @@ export function diffMappings(prev, curr) {
       if (!(k in currObj)) lines.push({ sign: '-', text: `${section}: ${k} → ${v}` })
     }
   }
+  const prevMaps = prev?.value_maps || {}
+  const currMaps = curr?.value_maps || {}
+  for (const [column, replacements] of Object.entries(currMaps)) {
+    for (const [source, target] of Object.entries(replacements)) {
+      if (prevMaps[column]?.[source] !== target) lines.push({ sign: '+', text: `value_maps: ${column}.${source} → ${target}` })
+    }
+  }
+  for (const [column, replacements] of Object.entries(prevMaps)) {
+    for (const [source, target] of Object.entries(replacements)) {
+      if (!(source in (currMaps[column] || {}))) lines.push({ sign: '-', text: `value_maps: ${column}.${source} → ${target}` })
+    }
+  }
   const prevDrops = new Set(prev?.drops || [])
   const currDrops = new Set(curr?.drops || [])
   for (const d of currDrops) if (!prevDrops.has(d)) lines.push({ sign: '+', text: `drops: ${d}` })

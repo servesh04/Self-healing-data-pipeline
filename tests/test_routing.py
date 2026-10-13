@@ -58,7 +58,9 @@ class TestRouteAfterDiagnose:
         classify at all, and a hypothetical missing value -- escalates
         without ever touching a specialist node.
         """
-        state = make_heal_state(drift_class=drift_class)
+        candidates = ([{"drift_class": drift_class, "finding_ids": ["x"], "confidence": 0.9}]
+                      if drift_class not in (None, "unknown") else [])
+        state = make_heal_state(drift_class=drift_class, candidates=candidates)
         assert route_after_diagnose(state) == expected
 
 
@@ -90,7 +92,7 @@ class TestRouteAfterConfidence:
         is what prevents a None from silently auto-applying an unvetted
         patch.
         """
-        state = make_heal_state(confidence=confidence)
+        state = make_heal_state(confidence=confidence, proposed_patch={"renames": {"a": "b"}})
         assert route_after_confidence(state) == expected
 
 

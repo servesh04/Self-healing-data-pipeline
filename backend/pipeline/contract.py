@@ -73,6 +73,7 @@ class Contract:
     schema: pa.DataFrameSchema
     row_count_min: int
     expected_dtypes: dict[str, str]  # column -> declared dtype string, for diff_contract (Phase 3)
+    allowed_values: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _build_column(spec: dict) -> Column:
@@ -99,6 +100,7 @@ def load_contract(path: Path = CONTRACT_PATH) -> Contract:
         schema=schema,
         row_count_min=int(raw.get("row_count_min", 0)),
         expected_dtypes={name: spec["dtype"] for name, spec in raw["columns"].items()},
+        allowed_values={name: list(spec["allowed"]) for name, spec in raw["columns"].items() if "allowed" in spec},
     )
 
 

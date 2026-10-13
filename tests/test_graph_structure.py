@@ -35,6 +35,8 @@ ALL_NODE_NAMES = {
     "spec_rename",
     "spec_type",
     "spec_nullability",
+    "spec_value",
+    "multi_specialist",
     "propose_patch",
     "human_approval",
     "apply_patch",
@@ -198,6 +200,8 @@ class TestHumanApprovalFork:
                 "drift_class": "rename",
                 "diagnosis": "stub: unsure",
                 "confidence": 0.3,  # below CONFIDENCE_THRESHOLD -> human_approval
+                "candidates": [{"drift_class": "rename", "confidence": 0.3,
+                                "finding_ids": ["col:column_in_dataframe", "stub:column_in_schema"]}],
             },
             "apply_patch": apply_patch_stub,
             **(overrides or {}),

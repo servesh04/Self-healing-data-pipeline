@@ -25,82 +25,51 @@ the guess isn't obviously right). Conflating them either auto-applies a
 wrong guess or escalates a case a human could have quickly approved.
 """
 
-DIAGNOSE_SYSTEM = """You are the diagnose node in a self-healing data pipeline.
+DIAGNOSE_SYSTEM = """Diagnose every structured finding. Return one JSON object:
+{"drift_class":"rename|type|nullability|value|mixed|unknown",
+ "diagnosis":"brief explanation", "confidence":0.0,
+ "candidates":[{"drift_class":"rename|type|nullability|value",
+                "finding_ids":["exact finding_id"],"confidence":0.0}]}
+Use one candidate per independent fix. A rename candidate covers exactly one
+missing_column and one unexpected_column. Type covers dtype_mismatch;
+nullability covers null_violation. Value covers only enum_value on a column
+whose contract allowed labels and complete observed frequencies are supplied.
+Before returning JSON, count the input finding_id values. Copy each exact
+finding_id into exactly one candidate. The total output finding_ids must
+equal the total input findings, with no duplicates or omissions. For a mixed
+rename + type + value case with four findings, return three candidates:
+the rename candidate has both structural finding_ids, and the type and value
+candidates have one finding_id each.
+Map abbreviations N/S/E/W to contract labels North/South/East/West only when
+evidence supports each match. A genuinely new category, truncated profile,
+unique, minimum, row_count, or unexplained column has no mechanical fix.
+If any finding is unfixable, return unknown with no candidates; never omit it.
+For mixed candidates use drift_class mixed. Confidence belongs to each fix;
+score ambiguous mappings low (<=0.4) for human review. Wrong auto-application
+is worse than review. Never invent a column, finding ID, or target label."""
 
-Your job: classify why the pipeline's data-quality checks failed, using the
-structured drift items and validation failures you are given — never guess at
-column names or values that aren't shown to you.
+SPEC_VALUE_SYSTEM = """You are the categorical value specialist. Return only
+one JSON object with this exact shape:
+{"value_maps":{"<column>":{"<observed unexpected value>":"<allowed label>"}}}.
+Include every observed unexpected value and no other source value. Targets
+must be labels from the provided allowed set. Do not map a new business
+category or guess an ambiguous abbreviation; return an empty value_maps
+object in that case. Preserve valid existing labels and nulls."""
+SPEC_VALUE_USER_TEMPLATE = """Findings: {drift_items}
+Raw distinct frequencies: {source_profile}
+Contract allowed values: {allowed_values}"""
 
-Respond with EXACTLY ONE JSON object matching this schema — never a list or array of objects, never multiple candidate answers, just a single {...}:
-{
-  "drift_class": "rename" | "type" | "nullability" | "unknown",
-  "diagnosis": "<1-2 sentences>",
-  "confidence": <float, 0.0 to 1.0>
-}
+DIAGNOSE_REPAIR_USER_TEMPLATE = """Your previous JSON diagnosis omitted or
+duplicated finding IDs. Rewrite the complete JSON diagnosis from scratch.
+Copy every exact finding_id from the findings below into exactly one candidate.
+Do not invent IDs or omit a finding. A rename requires both its missing and
+unexpected IDs in the same candidate. If any finding cannot be safely
+covered, return drift_class unknown and no candidates.
 
-This pipeline reruns and re-diagnoses after every patch — you are never
-required to fix everything in one pass. Answer two SEPARATE questions, in
-order. Do not let the second question influence the first, and do not let an
-unrelated extra drift item lower your confidence in a fix you ARE sure of.
-
-QUESTION 1 — drift_class: is there a viable CLASS of fix at all, based on the
-*shape* of the drift, regardless of how sure you are about the specifics?
-
-- Exactly one missing_column and exactly one unexpected_column, with
-  matching dtype — RENAME. This is a rename-shaped drift no matter what the
-  new column is actually called; the specific name does not have to look
-  like the old one for this to be the right class.
-- One or more dtype_mismatch items, all on the same column, recoverable by
-  an obvious mechanical transform (e.g. "1,240.00" is a float with
-  thousands separators, not a semantic change) — TYPE.
-- One or more null_violation items, all on the same column — NULLABILITY.
-- Anything that doesn't fit one of these shapes — UNKNOWN. In particular: an
-  unexpected_column with no matching missing_column (nothing disappeared to
-  explain what appeared, so there is nothing to rename it back to); a
-  value_violation where the allowed values changed in a way that isn't a
-  formatting artifact (category labels changed meaning or got abbreviated —
-  a genuine semantic change, not something any of the three fix types can
-  express); or more than one independent problem where NONE of them
-  individually fits one of the three shapes above. UNKNOWN requires that
-  NO drift item matches a shape — it is not triggered by having more than
-  one drift item.
-
-WORKED EXAMPLE — read this carefully, it is a common case: drift_items
-contains a missing_column "customer_id" + unexpected_column "cust_id" (a
-rename pair, matching dtype) AND ALSO a dtype_mismatch on "revenue". This is
-TWO drift items of different shapes, not "multiple unrelated problems" — the
-rename pair is, on its own, a complete and unambiguous RENAME candidate; the
-revenue issue is a separate matter for a LATER round, once this one is
-fixed and re-diagnosed on its own. Correct answer: drift_class="rename",
-HIGH confidence. It would be WRONG to answer "unknown" here just because two
-drift items are present — re-read "no drift item matches a shape" above:
-the rename pair plainly does.
-
-There is no fifth specialist for "unknown" — it always means "no patch to
-propose", and the run stops for a human to look at directly, not through a
-patch review.
-
-QUESTION 2 — confidence: now that you know the class (or that there isn't
-one), how much do you trust your SPECIFIC guess?
-
-- HIGH (>= 0.85): the specific guess is obvious. For a rename, the
-  unexpected column's name is a clear abbreviation or lexical variant of the
-  missing one (e.g. "cust_id" for "customer_id") — a human glancing at both
-  names would immediately agree. For type/nullability, the transform is a
-  well-known, unambiguous mechanical operation.
-- LOW (<= 0.4): always, for "unknown" — there is no guess to be confident in.
-  Also low when the class is right but the specific guess deserves a second
-  look: for a rename, the unexpected column's name does NOT obviously
-  correspond to the missing one (it could plausibly be a genuinely different
-  field — only the matching dtype and values suggest otherwise). Make your
-  best guess anyway; a human will review it before anything is applied. Do
-  not withhold a mapping just because you are unsure of it — say so via a
-  low confidence score instead, which is what routes it to that review.
-
-A wrongly auto-applied patch silently corrupts production data; a human
-reviewing a real, if uncertain, proposal costs a few seconds. These are not
-symmetric costs — do not round uncertainty up to a guess you'd stake
-auto-apply on."""
+Findings: {drift_items}
+Previous incomplete diagnosis: {previous_response}
+Missing finding IDs: {missing_ids}
+"""
 
 DIAGNOSE_USER_TEMPLATE = """Pipeline run failed. Here is what was observed:
 
@@ -284,9 +253,10 @@ a question, say plainly that you can only discuss existing run data.
 
 WHAT THIS PIPELINE DOES: it runs a dataset through a Pandera data-quality
 contract. When validation fails, an LLM diagnoses the failure into one of
-three fixable drift classes — "rename" (a column was renamed), "type" (a
-column's values need a cast, e.g. stripping thousands separators), or
-"nullability" (a null-handling policy is needed) — or "unknown" if nothing
+four fixable drift classes — "rename" (a column was renamed), "type" (a
+column's values need a cast, e.g. stripping thousands separators),
+"nullability" (a null-handling policy is needed), or "value" (an observed
+categorical abbreviation maps uniquely to a contract label) — or "unknown" if nothing
 fits that shape at all. A specialist proposes a config patch (never code)
 for the diagnosed class. If the agent's confidence in that SPECIFIC patch is
 >= CONFIDENCE_THRESHOLD (0.75), it applies automatically and reruns; below
@@ -333,9 +303,10 @@ a question, say plainly that you can only discuss existing run data.
 
 WHAT THIS PIPELINE DOES: it runs a dataset through a Pandera data-quality
 contract. When validation fails, an LLM diagnoses the failure into one of
-three fixable drift classes — "rename" (a column was renamed), "type" (a
-column's values need a cast, e.g. stripping thousands separators), or
-"nullability" (a null-handling policy is needed) — or "unknown" if nothing
+four fixable drift classes — "rename" (a column was renamed), "type" (a
+column's values need a cast, e.g. stripping thousands separators),
+"nullability" (a null-handling policy is needed), or "value" (a safe
+categorical abbreviation maps to a contract label) — or "unknown" if nothing
 fits that shape at all. A specialist proposes a config patch (never code)
 for the diagnosed class. If the agent's confidence in that SPECIFIC patch is
 >= CONFIDENCE_THRESHOLD (0.75), it applies automatically and reruns; below
@@ -351,7 +322,7 @@ never found a viable class at all, so it has 0 attempts and a 0% heal rate
 by construction, every time. That makes it a trivial, uninformative answer
 to "which drift class is hardest to heal" — technically the lowest rate,
 but not what the question is actually asking. For that kind of comparison,
-answer using the classes that DO get attempted (rename/type/nullability)
+answer using the classes that DO get attempted (rename/type/nullability/value)
 and their real healed-vs-escalated split; you may mention unknown's
 0-attempt figure alongside that as a separate, distinct fact, but do not
 lead with it as if it settled the comparison.

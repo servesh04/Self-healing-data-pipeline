@@ -27,7 +27,7 @@ export default function SchemaDiff({ detail }) {
     let status = 'matching'
     if (!inActual && inExpected) status = 'missing'
     else if (inActual && !inExpected) status = 'unexpected'
-    else if (drift && drift.kind === 'dtype_mismatch') status = 'mismatch'
+    else if (drift) status = 'mismatch'
     return { col, expectedType: expected[col] ?? '—', actualType: actual[col] ?? '—', status }
   })
 
@@ -62,6 +62,18 @@ export default function SchemaDiff({ detail }) {
           </tbody>
         </table>
       </div>
+      {(detail.drift_items || []).length > 0 && (
+        <div className="mt-3 space-y-1 border-t border-line pt-2 font-mono text-[11px] text-ink-muted">
+          {detail.drift_items.map((finding) => (
+            <div key={finding.finding_id ?? `${finding.column}:${finding.check}`}>
+              <span className="text-ink">{finding.column}</span> · {finding.kind} · {finding.check}
+              {finding.failure_count != null && ` · ${finding.failure_count} failure(s)`}
+              {finding.kind === 'enum_value' && ` · allowed ${finding.expected}`}
+              {finding.example_values?.length > 0 && ` · observed ${finding.example_values.join(', ')}`}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

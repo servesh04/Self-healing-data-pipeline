@@ -9,7 +9,9 @@ function summarize(mapping) {
     if (!value) continue
     if (Array.isArray(value) && value.length) parts.push(`${section}: [${value.join(', ')}]`)
     else if (!Array.isArray(value) && Object.keys(value).length) {
-      const entries = Object.entries(value).map(([k, v]) => `${k}→${v}`)
+      const entries = section === 'value_maps'
+        ? Object.entries(value).flatMap(([column, replacements]) => Object.entries(replacements).map(([source, target]) => `${column}.${source}→${target}`))
+        : Object.entries(value).map(([k, v]) => `${k}→${v}`)
       parts.push(`${section}: ${entries.join(', ')}`)
     }
   }

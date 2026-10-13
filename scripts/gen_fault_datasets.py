@@ -118,6 +118,27 @@ def main() -> None:
         del r["customer_id"]
     write_csv(OUT_DIR / "day6_ambiguous_rename.csv", ambiguous_header, ambiguous_rows)
 
+    # P0: the contract expects full names; source abbreviations are repairable.
+    value_rows = [{**r, "region": r["region"][0]} for r in rows]
+    write_csv(OUT_DIR / "day7_value_drift.csv", HEADER, value_rows)
+
+    mixed_rows = [{**r, "cust_id": r["customer_id"],
+                   "region": r["region"][0],
+                   "revenue": comma_format(r["revenue"])} for r in rows]
+    for r in mixed_rows:
+        del r["customer_id"]
+    write_csv(OUT_DIR / "day7_mixed.csv", renamed_header, mixed_rows)
+
+    new_category = [{**r, "region": "Central" if i == 0 else r["region"]}
+                    for i, r in enumerate(rows)]
+    write_csv(OUT_DIR / "negative_new_category.csv", HEADER, new_category)
+    negative_min = [{**r, "revenue": -1.0 if i == 0 else r["revenue"]}
+                    for i, r in enumerate(rows)]
+    write_csv(OUT_DIR / "negative_minimum.csv", HEADER, negative_min)
+    negative_unique = [{**r, "order_id": 1 if i == 1 else r["order_id"]}
+                       for i, r in enumerate(rows)]
+    write_csv(OUT_DIR / "negative_unique.csv", HEADER, negative_unique)
+
 
 if __name__ == "__main__":
     print(f"generating fault datasets into {OUT_DIR} ...")

@@ -8,6 +8,8 @@ def escalate(state: dict) -> dict:
     tried = len(state.get("history", []))
     if state.get("human_decision") == "reject":
         reason = "human rejected the proposed patch"
+    elif state.get("patch_error") or state.get("proposal_error"):
+        reason = state.get("patch_error") or state.get("proposal_error")
     elif state.get("drift_class") == "unknown":
         diagnosis = state.get("diagnosis")
         reason = f"unclassifiable drift ({diagnosis})" if diagnosis else "unclassifiable drift"

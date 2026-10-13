@@ -1,57 +1,67 @@
-"""Real node — Phase 3/4. Backs up the current mapping, merges the patch,
-persists it (ARCHITECTURE.md's node spec) — never to the container
-filesystem, always to Postgres (backend/services/store.py).
-
-`heal_attempts` is incremented HERE and only here — never in a router (see
-ARCHITECTURE.md's guardrail). This must reflect actual prior state for the
-MAX_HEAL_ATTEMPTS cap and the heal-cycle demonstration to mean anything.
-
-"Backs up the current mapping" falls out of store.py's append-only design:
-save_mapping() never overwrites, it inserts a new row, so the pre-patch
-mapping is simply the previous row and is never lost.
-
-The patch is a FRAGMENT (e.g. just `{"renames": {...}}`), not a full
-mapping — merging means taking the current mapping and updating only the
-section(s) the patch names, not replacing the whole thing.
-"""
-
+"""Preflight a complete batch, then persist it once with compare-and-swap."""
 import logging
+import hashlib
+from pathlib import Path
 
+from graph.nodes.multi_specialist import merge_fragments
+from pipeline.contract import load_contract
 from pipeline.mapping import MappingPatch
+from pipeline.runner import run_pipeline
 from services import store
 
 log = logging.getLogger(__name__)
 
 
+def merge_mapping(current: MappingPatch, patch: dict) -> MappingPatch:
+    candidate = merge_fragments([patch])
+    for section in ("renames", "casts", "null_policy"):
+        existing = getattr(current, section)
+        overlap = set(existing) & set(candidate.get(section, {}))
+        if overlap:
+            raise ValueError(f"patch rewrites existing {section}: {sorted(overlap)}")
+    if set(current.drops) & set(candidate.get("drops", [])):
+        raise ValueError("patch repeats an existing drop")
+    maps = {col: dict(replacements) for col, replacements in current.value_maps.items()}
+    for col, replacements in candidate.get("value_maps", {}).items():
+        for source, target in replacements.items():
+            if source in maps.get(col, {}):
+                raise ValueError(f"patch rewrites existing value mapping: {col}.{source}")
+        maps.setdefault(col, {}).update(replacements)
+    return MappingPatch(
+        renames={**current.renames, **candidate.get("renames", {})},
+        casts={**current.casts, **candidate.get("casts", {})},
+        null_policy={**current.null_policy, **candidate.get("null_policy", {})},
+        drops=list(dict.fromkeys([*current.drops, *candidate.get("drops", [])])),
+        value_maps=maps,
+    )
+
+
 async def apply_patch(state: dict) -> dict:
     patch = state.get("proposed_patch") or {}
-
+    if not patch or not any(patch.values()):
+        return {"patch_error": "empty patch", "applied_patch": None}
     try:
-        current = await store.get_current_mapping()
-        merged = MappingPatch(
-            renames={**current.renames, **patch.get("renames", {})},
-            casts={**current.casts, **patch.get("casts", {})},
-            null_policy={**current.null_policy, **patch.get("null_policy", {})},
-            # dict.fromkeys dedupes while preserving order; a patch re-naming
-            # an already-dropped column shouldn't create a duplicate entry.
-            drops=list(dict.fromkeys([*current.drops, *patch.get("drops", [])])),
-        )
-        await store.save_mapping(
-            merged,
+        current, version = await store.get_current_mapping_version()
+        if version != state.get("mapping_version_read"):
+            raise ValueError("mapping changed since this run started")
+        source_hash = hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest()
+        if source_hash != state.get("source_sha256"):
+            raise ValueError("source changed since this run started")
+        merged = merge_mapping(current, patch)
+        preflight = run_pipeline(state["source_path"], merged, load_contract())
+        if hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest() != source_hash:
+            raise ValueError("source changed during preflight")
+        if not preflight.passed:
+            raise ValueError("preflight failed: " + "; ".join(preflight.as_strings()[:5]))
+        written = await store.save_mapping_cas(
+            merged, expected_id=version,
             updated_by=f"agent:attempt-{state['heal_attempts'] + 1}",
             run_id=state.get("run_id"),
         )
-    except Exception:
-        # Persisting the patch failed (e.g. Postgres unreachable, or the
-        # merged patch failed MappingPatch's own validation — shouldn't
-        # happen given propose_patch's schema, but defense in depth). The
-        # attempt still counts: rerun_validate will observe the mapping
-        # unchanged and correctly report a failed attempt, rather than this
-        # node raising and killing the run.
-        log.exception("apply_patch: failed to persist the merged mapping")
-
-    return {
-        "heal_attempts": state["heal_attempts"] + 1,
-        "applied_patch": patch,
-        "awaiting_approval": False,
-    }
+    except Exception as exc:
+        log.warning("apply_patch: batch rejected: %s", exc)
+        return {"patch_error": str(exc), "applied_patch": None,
+                "mapping_version_written": None, "awaiting_approval": False}
+    return {"heal_attempts": state["heal_attempts"] + 1,
+            "applied_patch": patch, "mapping_version_written": written,
+            "patch_error": None, "awaiting_approval": False}

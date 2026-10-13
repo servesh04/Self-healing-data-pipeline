@@ -127,6 +127,14 @@ def make_heal_state():
             "assertion_failure_details": [],
             "source_profile": {},
             "specialist_output": None,
+            "specialist_outputs": None,
+            "candidates": [],
+            "components": [],
+            "mapping_version_read": None,
+            "mapping_version_written": None,
+            "source_sha256": None,
+            "patch_error": None,
+            "proposal_error": None,
         }
         state.update(overrides)
         return state
@@ -252,6 +260,8 @@ _STUB_NAMES = (
     "spec_rename",
     "spec_type",
     "spec_nullability",
+    "spec_value",
+    "multi_specialist",
     "propose_patch",
     "apply_patch",
     "rerun_validate",
@@ -284,17 +294,32 @@ def _default_stub_bodies() -> dict:
             "expected_schema": {},
             "drift_items": [
                 {
-                    "kind": "dtype_mismatch",
+                    "kind": "missing_column",
+                    "finding_id": "col:column_in_dataframe",
+                    "check": "column_in_dataframe",
+                    "failure_count": 1,
                     "column": "col",
                     "expected": "int64",
-                    "actual": "str",
+                    "actual": "column_in_dataframe",
+                    "example_values": [],
+                },
+                {
+                    "kind": "unexpected_column",
+                    "finding_id": "stub:column_in_schema",
+                    "check": "column_in_schema",
+                    "failure_count": 1,
+                    "column": "stub",
+                    "expected": "(not declared in contract)",
+                    "actual": "column_in_schema",
                     "example_values": [],
                 }
             ],
         }
 
     def diagnose(state):
-        return {"drift_class": "rename", "diagnosis": "stub: looks like a rename", "confidence": 0.9}
+        return {"drift_class": "rename", "diagnosis": "stub: looks like a rename", "confidence": 0.9,
+                "candidates": [{"drift_class": "rename", "confidence": 0.9,
+                                "finding_ids": ["col:column_in_dataframe", "stub:column_in_schema"]}]}
 
     def specialist(state):
         return {"specialist_output": {}}
@@ -339,6 +364,8 @@ def _default_stub_bodies() -> dict:
         "spec_rename": specialist,
         "spec_type": specialist,
         "spec_nullability": specialist,
+        "spec_value": specialist,
+        "multi_specialist": specialist,
         "propose_patch": propose_patch,
         "apply_patch": apply_patch,
         "rerun_validate": rerun_validate,

@@ -31,6 +31,10 @@ def apply_mapping(df: pd.DataFrame, mapping: MappingPatch) -> pd.DataFrame:
         if column in df.columns:
             df[column] = NULL_POLICY_REGISTRY[op](df[column])
 
+    for column, replacements in mapping.value_maps.items():
+        if column in df.columns:
+            df[column] = df[column].replace(replacements)
+
     return df
 
 

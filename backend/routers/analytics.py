@@ -14,8 +14,8 @@ from services.analytics import collect_run_summaries
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[Depends(require_token)])
 
-DRIFT_CLASSES = ["rename", "type", "nullability", "unknown"]
-SPECIALISTS = ["spec_rename", "spec_type", "spec_nullability"]
+DRIFT_CLASSES = ["rename", "type", "nullability", "value", "unknown"]
+SPECIALISTS = ["spec_rename", "spec_type", "spec_nullability", "spec_value"]
 
 
 def _graph_app(request: Request):
@@ -74,7 +74,7 @@ async def confidence(
                     "run_id": r["run_id"],
                     "attempt_no": h["attempt_no"],
                     "confidence": h["confidence"],
-                    "drift_class": h["specialist"].replace("spec_", ""),
+                    "drift_class": "+".join(c["drift_class"] for c in h.get("components", [])) or h["specialist"].replace("spec_", ""),
                     "specialist": h["specialist"],
                     "result": h["result"],
                     "approved_by": h.get("approved_by"),
@@ -155,11 +155,11 @@ async def drift_distribution(
                 counts[cls]["escalated"] += 1
             continue
         for h in r["history"]:
-            cls = h["specialist"].replace("spec_", "")
-            if cls not in counts:
-                continue
-            counts[cls]["count"] += 1
-            counts[cls]["healed" if healed else "escalated"] += 1
+            classes = [c["drift_class"] for c in h.get("components", [])] or [h["specialist"].replace("spec_", "")]
+            for cls in set(classes):
+                if cls in counts:
+                    counts[cls]["count"] += 1
+                    counts[cls]["healed" if healed else "escalated"] += 1
     return [{"drift_class": c, **v} for c, v in counts.items()]
 
 
@@ -171,11 +171,12 @@ async def specialist_performance(
     tally = {s: {"attempts": 0, "passed": 0} for s in SPECIALISTS}
     for r in runs:
         for h in r["history"]:
-            s = h["specialist"]
-            if s in tally:
-                tally[s]["attempts"] += 1
-                if h["result"] == "passed":
-                    tally[s]["passed"] += 1
+            specialists = [c["specialist"] for c in h.get("components", [])] or [h["specialist"]]
+            for s in set(specialists):
+                if s in tally:
+                    tally[s]["attempts"] += 1
+                    if h["result"] == "passed":
+                        tally[s]["passed"] += 1
     return [
         {
             "specialist": s,

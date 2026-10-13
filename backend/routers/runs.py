@@ -99,6 +99,14 @@ def _blank_state(run_id: str, source_path: str) -> dict:
         "assertion_failure_details": [],
         "source_profile": {},
         "specialist_output": None,
+        "specialist_outputs": None,
+        "candidates": [],
+        "components": [],
+        "mapping_version_read": None,
+        "mapping_version_written": None,
+        "source_sha256": None,
+        "patch_error": None,
+        "proposal_error": None,
     }
 
 

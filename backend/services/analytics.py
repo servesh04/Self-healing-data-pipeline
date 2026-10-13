@@ -156,7 +156,11 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
     last = history[-1] if history else None
 
     final_confidence = last["confidence"] if last else values.get("confidence")
-    final_drift_class = last["specialist"].replace("spec_", "") if last else values.get("drift_class")
+    final_drift_class = (
+        "+".join(c["drift_class"] for c in last.get("components", []))
+        if last and last.get("components") else
+        last["specialist"].replace("spec_", "") if last else values.get("drift_class")
+    )
     approved_by = last.get("approved_by") if last else None
 
     created_at = record["created_at"]

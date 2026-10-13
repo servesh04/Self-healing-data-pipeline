@@ -24,6 +24,8 @@ from graph.nodes.run_pipeline import run_pipeline
 from graph.nodes.spec_nullability import spec_nullability
 from graph.nodes.spec_rename import spec_rename
 from graph.nodes.spec_type import spec_type
+from graph.nodes.spec_value import spec_value
+from graph.nodes.multi_specialist import multi_specialist
 from graph.routing import (
     route_after_confidence,
     route_after_diagnose,
@@ -44,6 +46,8 @@ def build_graph(checkpointer):
     g.add_node("spec_rename", spec_rename)
     g.add_node("spec_type", spec_type)
     g.add_node("spec_nullability", spec_nullability)
+    g.add_node("spec_value", spec_value)
+    g.add_node("multi_specialist", multi_specialist)
     g.add_node("propose_patch", propose_patch)
     g.add_node("human_approval", human_approval)
     g.add_node("apply_patch", apply_patch)
@@ -68,24 +72,29 @@ def build_graph(checkpointer):
             "spec_rename": "spec_rename",
             "spec_type": "spec_type",
             "spec_nullability": "spec_nullability",
+            "spec_value": "spec_value",
+            "multi_specialist": "multi_specialist",
             "escalate": "escalate",
         },
     )
     g.add_edge("spec_rename", "propose_patch")
     g.add_edge("spec_type", "propose_patch")
     g.add_edge("spec_nullability", "propose_patch")
+    g.add_edge("spec_value", "propose_patch")
+    g.add_edge("multi_specialist", "propose_patch")
 
     g.add_conditional_edges(
         "propose_patch",
         route_after_confidence,
-        {"apply_patch": "apply_patch", "human_approval": "human_approval"},
+        {"apply_patch": "apply_patch", "human_approval": "human_approval", "escalate": "escalate"},
     )
     g.add_conditional_edges(
         "human_approval",
         route_after_human_approval,
         {"apply_patch": "apply_patch", "escalate": "escalate"},
     )
-    g.add_edge("apply_patch", "rerun_validate")
+    g.add_conditional_edges("apply_patch", lambda s: "escalate" if s.get("patch_error") else "rerun_validate",
+                            {"escalate": "escalate", "rerun_validate": "rerun_validate"})
 
     g.add_conditional_edges(
         "rerun_validate",

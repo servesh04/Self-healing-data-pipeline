@@ -21,11 +21,15 @@ class DriftItem(TypedDict):
         "dtype_mismatch",
         "null_violation",
         "value_violation",
+        "enum_value", "unique", "minimum", "row_count", "unknown",
     ]
     column: str
     expected: str
     actual: str
     example_values: list[str]
+    finding_id: str
+    check: str
+    failure_count: int
 
 
 class HealAttempt(TypedDict):
@@ -37,6 +41,8 @@ class HealAttempt(TypedDict):
     approved_by: Optional[str]  # "auto" | "human" | None
     result: Literal["passed", "failed", "rejected"]
     assertion_failures: list[str]
+    components: list[dict]
+    mapping_version: Optional[int]
 
 
 class HealState(TypedDict):
@@ -56,14 +62,21 @@ class HealState(TypedDict):
     drift_items: list[DriftItem]
 
     # ── Diagnosis (LLM in Phase 3; hardcoded in Phase 2) ──
-    drift_class: Optional[Literal["rename", "type", "nullability", "unknown"]]
+    drift_class: Optional[Literal["rename", "type", "nullability", "value", "mixed", "unknown"]]
     diagnosis: Optional[str]
     confidence: Optional[float]  # 0.0 – 1.0
+    candidates: list[dict]
 
     # ── Patch ──
     proposed_patch: Optional[dict]
     patch_rationale: Optional[str]
     applied_patch: Optional[dict]
+    mapping_version_read: Optional[int]
+    mapping_version_written: Optional[int]
+    source_sha256: Optional[str]
+    patch_error: Optional[str]
+    proposal_error: Optional[str]
+    components: list[dict]
 
     # ── Human gate ──
     awaiting_approval: bool
@@ -109,6 +122,7 @@ class HealState(TypedDict):
     assertion_failure_details: list[dict]
     source_profile: dict[str, dict]
     specialist_output: Optional[dict]
+    specialist_outputs: Optional[list[dict]]
 
 
 MAX_HEAL_ATTEMPTS = 3
