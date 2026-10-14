@@ -26,12 +26,15 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from langgraph.types import Command
 from pydantic import BaseModel
+import psycopg
 
 from auth import require_token
 from graph.state import RECURSION_LIMIT
 from services import checkpointer, store
 from services.analytics import collect_run_summaries, invalidate_run_summaries
 from pipeline.contract import get_registry
+from pipeline.distribution import load_baseline
+from pipeline.sources import SourceUnavailable, materialize_source
 from config import get_settings
 
 log = logging.getLogger(__name__)
@@ -80,7 +83,8 @@ router = APIRouter(
 
 
 class TriggerRunRequest(BaseModel):
-    source_path: str
+    source_id: str | None = None
+    source_path: str | None = None  # accepted for older dashboard clients; still an ID
     contract_name: str = "default"
 
 
@@ -90,10 +94,22 @@ class ApprovalRequest(BaseModel):
 
 def _blank_state(run_id: str, source_path: str, contract_name: str = "default",
                  contract_version: str | None = None, contract_snapshot: dict | None = None,
-                 pipeline_env: str | None = None) -> dict:
+                 pipeline_env: str | None = None, source_family: str | None = None,
+                 source_ref: dict | None = None, distribution_baseline: dict | None = None) -> dict:
     return {
         "run_id": run_id,
         "source_path": source_path,
+        "source_family": source_family,
+        "source_ref": source_ref,
+        "distribution_baseline": distribution_baseline,
+        "distribution_alerts": [],
+        "distribution_skipped": [],
+        "distribution_profile": {},
+        "distribution_baseline_id": None,
+        "distribution_baseline_version": None,
+        "distribution_baseline_digest": None,
+        "monitor_error": None,
+        "monitor_completed": False,
         "contract_name": contract_name,
         "contract_version": contract_version,
         "contract_snapshot": contract_snapshot,
@@ -156,17 +172,40 @@ async def _execute(graph_app, run_id: str, stream_input,
     """
     cfg = {"configurable": {"thread_id": run_id}, "recursion_limit": RECURSION_LIMIT}
     try:
-        async for event in graph_app.astream(stream_input, config=cfg, stream_mode="updates"):
-            for node_name in event:
-                log.info("run %s: node %r fired", run_id, node_name)
+        # A dedicated connection holds the session lock without consuming a
+        # slot from the application's eight-connection worker pool.
+        async with await psycopg.AsyncConnection.connect(
+            get_settings().database_url, connect_timeout=10, autocommit=True
+        ) as lock_conn:
+            await lock_conn.execute("select set_config('statement_timeout', '120000', false)")
+            if not await store.acquire_run_execution_lock(lock_conn, run_id):
+                log.warning("run %s: duplicate execution skipped", run_id)
+                return
+            try:
+                async for event in graph_app.astream(stream_input, config=cfg, stream_mode="updates"):
+                    for node_name in event:
+                        log.info("run %s: node %r fired", run_id, node_name)
+            finally:
+                await store.release_run_execution_lock(lock_conn, run_id)
     except Exception:
         log.exception("run %s: background execution failed", run_id)
     finally:
+        try:
+            snapshot = await graph_app.aget_state({"configurable": {"thread_id": run_id}})
+            values = snapshot.values or {}
+            validated = (bool(values.get("assertions_passed"))
+                         if values.get("human_decision") == "approve" and values.get("heal_attempts", 0) > 0
+                         else None)
+            await store.record_approval_outcome(run_id, values.get("status", "running"),
+                                                validated)
+        except Exception:
+            log.exception("run %s: approval outcome audit failed", run_id)
         invalidate_run_summaries(pipeline_env, contract_name)
 
 
 def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = None) -> dict:
     values = dict(snapshot.values) if snapshot.values else {}
+    source_ref = values.get("source_ref") or {}
 
     interrupts = [i.value for task in snapshot.tasks for i in task.interrupts]
     awaiting = bool(interrupts)
@@ -189,6 +228,9 @@ def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = N
     # interrupted run, in this project's history, until this line changed.
     return {
         **values,
+        "source_id": source_ref.get("source_id") or Path(values.get("source_path") or "").name,
+        "source_path": (source_ref["source_id"] if source_ref.get("kind") == "database_table"
+                        else values.get("source_path")),
         "run_id": run_id,
         "api_status": api_status,
         "awaiting_approval": awaiting,
@@ -205,17 +247,26 @@ async def trigger_run(
     graph_app=Depends(_graph_app),
 ) -> dict:
     run_id = str(uuid.uuid4())
-    source_path = _resolve_source_path(body.source_path)
     try:
         contract = get_registry().get(body.contract_name)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     env = get_settings().pipeline_env
-    await store.record_run(run_id, source_path, env, contract.name, contract.version,
-                           {"kind": "bundled_csv", "source_id": body.source_path})
+    source_id = body.source_id or body.source_path
+    if not source_id or (body.source_id and body.source_path and body.source_id != body.source_path):
+        raise HTTPException(status_code=422, detail="one source ID is required")
+    try:
+        source = await materialize_source(source_id, contract.name, run_id)
+        baseline = load_baseline(contract.name, source.family)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except SourceUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    await store.record_run(run_id, source.path, env, contract.name, contract.version, source.ref)
     invalidate_run_summaries(env, contract.name)
     background.add_task(_execute, graph_app, run_id,
-                        _blank_state(run_id, source_path, contract.name, contract.version, contract.spec, env),
+                        _blank_state(run_id, source.path, contract.name, contract.version, contract.spec, env,
+                                     source.family, source.ref, baseline),
                         env, contract.name)
     return {"run_id": run_id}
 
@@ -258,6 +309,7 @@ async def list_runs(
                 "run_id": r["run_id"],
                 "dataset": r["dataset"],
                 "source_path": r["source_path"],
+                "source_id": r["dataset"],
                 "status": r["status"],
                 "api_status": r["status"],  # kept alongside `status` for any existing caller
                 "drift_class": r["drift_class"],
@@ -286,7 +338,16 @@ async def get_run(run_id: str, graph_app=Depends(_graph_app)) -> dict:
     env = record["pipeline_env"] if record else values.get("pipeline_env")
     contract_name = record["contract_name"] if record else values.get("contract_name", "default")
     audit = await store.mapping_history_for_run(run_id, env, contract_name=contract_name)
-    return _serialize_state(run_id, snapshot, mapping_audit=audit)
+    detail = _serialize_state(run_id, snapshot, mapping_audit=audit)
+    detail["approval_history"] = await store.approval_history(run_id)
+    return detail
+
+
+@router.get("/{run_id}/approvals")
+async def get_run_approvals(run_id: str) -> dict:
+    if await store.get_run_record(run_id) is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return {"approvals": await store.approval_history(run_id)}
 
 
 async def _resume(
@@ -301,18 +362,30 @@ async def _resume(
     if not snapshot.values:
         raise HTTPException(status_code=404, detail="run not found")
     if snapshot.next != ("human_approval",):
+        existing = await store.get_approval_decision(run_id)
+        if existing and existing["decision"] == decision:
+            return {"run_id": run_id, "resumed_with": decision, "already_recorded": True}
         raise HTTPException(
             status_code=409,
             detail=f"run is not awaiting approval (next={list(snapshot.next)})",
         )
 
     state = dict(snapshot.values)
-    for index in range(len(state.get("components") or [{}])):
-        await store.record_component_event(state, index, "decision",
-            decision="human_approved" if decision == "approve" else "human_rejected", detail=note)
-        if decision == "reject":
-            await store.record_component_event(state, index, "outcome",
-                detail="human rejected before mapping write", attempt_no=state.get("heal_attempts", 0) + 1)
+    try:
+        should_dispatch = await store.claim_approval(state, decision, note)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not should_dispatch:
+        return {"run_id": run_id, "resumed_with": decision, "already_recorded": True}
+    try:
+        for index in range(len(state.get("components") or [{}])):
+            await store.record_component_event(state, index, "decision",
+                decision="human_approved" if decision == "approve" else "human_rejected", detail=note)
+            if decision == "reject":
+                await store.record_component_event(state, index, "outcome",
+                    detail="human rejected before mapping write", attempt_no=state.get("heal_attempts", 0) + 1)
+    except Exception:
+        log.exception("run %s: component decision audit failed", run_id)
 
     background.add_task(
         _execute, graph_app, run_id, Command(resume={"decision": decision, "note": note}),

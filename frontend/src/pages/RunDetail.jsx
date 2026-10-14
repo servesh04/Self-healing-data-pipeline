@@ -47,7 +47,7 @@ export default function RunDetail() {
 
       {detail?.source_path && (
         <p className="font-mono text-xs text-ink-faint">
-          {detail.source_path.split(/[\\/]/).pop()}
+          {detail.source_ref?.source_id ?? detail.source_path.split(/[\\/]/).pop()}
           <span className="ml-2 rounded border border-line-strong px-1.5 py-0.5 text-[10px] text-ink-muted">
             {detail.contract_name || 'default'} · {detail.contract_version?.slice(0, 8) || 'legacy'}
           </span>
@@ -63,6 +63,17 @@ export default function RunDetail() {
         </p>
       )}
       {detail?.audit_error && <p className="text-xs text-fail">Audit warning: {detail.audit_error}</p>}
+      {detail?.distribution_alerts?.length > 0 && (
+        <div className="rounded border border-signal bg-signal/10 px-3 py-2 text-xs text-signal">
+          Distribution alert against {detail.distribution_baseline_id} · {detail.distribution_baseline_version}
+          {detail.distribution_alerts.map((alert) => (
+            <p key={alert.column} className="mt-1">{alert.column}: median {alert.observed_median.toFixed(2)} versus {alert.baseline_median.toFixed(2)} ({alert.distance_iqr.toFixed(2)} baseline IQRs)</p>
+          ))}
+        </div>
+      )}
+      {detail?.distribution_skipped?.some((item) => item.reason === 'insufficient sample') && (
+        <p className="text-xs text-ink-muted">Distribution check skipped: sample below the monitoring minimum.</p>
+      )}
 
       {/* GraphCanvas takes the remaining width; supporting detail moves into
           a fixed 380px sidebar (DASHBOARD.md's only two run-detail layout
@@ -77,6 +88,18 @@ export default function RunDetail() {
         </div>
         <div className="flex w-full flex-col gap-4 lg:w-[380px] lg:shrink-0">
           <ApprovalPanel detail={detail} />
+          {detail?.approval_history?.length > 0 && (
+            <details className="rounded-lg border border-line bg-surface">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wider text-ink-muted">Approval history</summary>
+              <div className="space-y-2 border-t border-line p-3 text-xs text-ink-muted">
+                {detail.approval_history.map((item) => (
+                  <p key={item.attempt_no}>Attempt {item.attempt_no}: {item.decision} · {item.final_status ?? 'pending'}
+                    {item.note && <span className="block text-ink-faint">{item.note}</span>}
+                  </p>
+                ))}
+              </div>
+            </details>
+          )}
           <AssertionBars detail={detail} />
           <SchemaDiff detail={detail} />
           <PatchDiff detail={detail} />

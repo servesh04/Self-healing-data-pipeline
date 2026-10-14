@@ -68,9 +68,10 @@ async def summary(
     runs = await collect_run_summaries(graph_app, pipeline_env, contract_name)
     total = len(runs)
     clean = sum(1 for r in runs if r["status"] == "clean")
-    drifted = total - clean  # clean runs never needed healing — excluded per spec
-    auto_healed = sum(1 for r in runs if r["status"] == "healed" and r["approved_by"] != "human")
-    human_approved = sum(1 for r in runs if r["status"] == "healed" and r["approved_by"] == "human")
+    alerts = sum(1 for r in runs if r["status"] == "alert")
+    drifted = sum(1 for r in runs if r["status"] in {"healed", "escalated"} or r["heal_attempts"] > 0)
+    auto_healed = sum(1 for r in runs if r["status"] in {"healed", "alert"} and r["heal_attempts"] > 0 and r["approved_by"] != "human")
+    human_approved = sum(1 for r in runs if r["status"] in {"healed", "alert"} and r["heal_attempts"] > 0 and r["approved_by"] == "human")
     escalated = sum(1 for r in runs if r["status"] == "escalated")
 
     # Denominator is runs that actually produced ≥1 heal attempt -- NOT
@@ -97,6 +98,7 @@ async def summary(
         "mean_heal_attempts": round(mean_heal_attempts, 2),
         "attempted_runs": len(attempted),  # the mean's actual denominator -- surfaced so it's never a mystery number
         "clean_runs": clean,
+        "distribution_alerts": alerts,
     }
 
 
@@ -180,9 +182,9 @@ async def drift_distribution(
         # left paused at human_approval, with no history yet, was inflating
         # rename's escalated count by 1 purely because it hadn't been
         # resolved yet, not because it had actually escalated.
-        if r["status"] not in ("healed", "escalated"):
+        if r["status"] not in ("healed", "escalated", "alert") or (r["status"] == "alert" and not r["heal_attempts"]):
             continue
-        healed = r["status"] == "healed"
+        healed = r["status"] in ("healed", "alert")
         if not r["history"]:
             # Never reached a specialist -- diagnose's own last write is
             # accurate here, nothing overwrites it after an

@@ -1,0 +1,13 @@
+# Only these named database tables can be requested. The connection string is
+# read from the named environment variable; no SQL or credentials enter the API.
+database_tables:
+  orders_table_demo:
+    connection_env: P2_SOURCE_DATABASE_URL
+    schema: public
+    table: p2_orders_snapshot
+    order_key: order_id
+    contract_name: default
+    family: orders_table_demo
+    row_cap: 5000
+    byte_cap: 10485760
+    statement_timeout_ms: 10000

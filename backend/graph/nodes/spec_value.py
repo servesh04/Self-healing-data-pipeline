@@ -9,6 +9,7 @@ from pipeline.contract import contract_for_state
 from prompts.prompts import SPEC_VALUE_SYSTEM, SPEC_VALUE_USER_TEMPLATE
 from services.llm import LLMError, call_json
 from services import store
+from services.approval_examples import example_context
 
 log = logging.getLogger(__name__)
 
@@ -34,11 +35,12 @@ async def spec_value(state: dict) -> dict:
                            or profile.get(f["column"], {}).get("truncated") for f in findings):
         return {"specialist_output": {}}
     try:
-        raw = await call_json(SPEC_VALUE_SYSTEM, SPEC_VALUE_USER_TEMPLATE.format(
+        user_prompt = SPEC_VALUE_USER_TEMPLATE.format(
             drift_items=json.dumps(findings),
             source_profile=json.dumps({f["column"]: profile.get(f["column"], {}) for f in findings}),
             allowed_values=json.dumps({f["column"]: allowed[f["column"]] for f in findings}),
-        ))
+        ) + await example_context(state, "spec_value")
+        raw = await call_json(SPEC_VALUE_SYSTEM, user_prompt)
     except LLMError as exc:
         log.warning("spec_value: LLM call failed: %s", exc)
         return {"specialist_output": {}}

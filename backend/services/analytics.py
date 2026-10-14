@@ -187,8 +187,10 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
         "run_id": run_id,
         "contract_name": record.get("contract_name", "default"),
         "contract_version": record.get("contract_version"),
-        "source_path": record["source_path"],
-        "dataset": Path(record["source_path"]).name,
+        "source_path": ((record.get("source_ref") or {}).get("source_id")
+                        if (record.get("source_ref") or {}).get("kind") == "database_table"
+                        else record["source_path"]),
+        "dataset": (record.get("source_ref") or {}).get("source_id") or Path(record["source_path"]).name,
         "status": status,
         "drift_class": final_drift_class,
         "heal_attempts": values.get("heal_attempts", 0),

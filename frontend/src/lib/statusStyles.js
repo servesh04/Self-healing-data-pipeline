@@ -18,6 +18,8 @@ export function runStatusChip(status, approvedBy) {
         : { className: 'border-pass text-pass', label: 'HEALED' }
     case 'escalated':
       return { className: 'border-fail text-fail', label: 'ESCALATED' }
+    case 'alert':
+      return { className: 'border-signal text-signal', label: 'ALERT' }
     case 'awaiting_approval':
       return { className: 'animate-pulse border-signal text-signal', label: 'AWAITING' }
     case 'running':
@@ -33,6 +35,7 @@ export const RUN_STATUS_BADGE = {
   clean: 'border-line-strong text-ink-muted',
   healed: 'border-pass bg-pass/15 text-pass',
   escalated: 'border-fail bg-fail/15 text-fail',
+  alert: 'border-signal bg-signal/15 text-signal',
   awaiting_approval: 'border-signal bg-signal/15 text-signal',
   running: 'border-running bg-running/15 text-running',
 }

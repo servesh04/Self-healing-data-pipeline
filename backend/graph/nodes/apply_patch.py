@@ -8,6 +8,7 @@ from pipeline.contract import Contract, contract_for_state
 from pipeline.mapping import MappingPatch
 from pipeline.runner import run_pipeline
 from services import store
+from pipeline.sources import ensure_source_path
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ async def apply_patch(state: dict) -> dict:
     if not patch or not any(patch.values()):
         return {"patch_error": "empty patch", "applied_patch": None}
     try:
+        await ensure_source_path(state)
         contract = contract_for_state(state)
         current, version = await store.get_current_mapping_version(state.get("pipeline_env"), contract.name, contract)
         if version != state.get("mapping_version_read"):

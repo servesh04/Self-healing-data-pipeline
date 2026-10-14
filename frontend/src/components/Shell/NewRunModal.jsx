@@ -10,8 +10,12 @@ export default function NewRunModal() {
   const triggerError = useRunStore((s) => s.triggerError)
   const [dataset, setDataset] = useState(DATASETS[3].file)
   const contractName = useRunStore((s) => s.contractName)
-  const choices = contractName === 'compact' ? [{ file: 'compact_clean.csv', label: 'compact — clean control' }] : DATASETS
-  useEffect(() => { setDataset(choices[0].file) }, [contractName])
+  const sources = useRunStore((s) => s.sources)
+  const choices = sources.length ? sources.map((s) => ({ file: s.source_id,
+    label: `${s.source_id}${s.kind === 'database_table' ? ' (database table)' : ''}`,
+    available: s.available !== false })) :
+    (contractName === 'compact' ? [{ file: 'compact_clean.csv', label: 'compact — clean control' }] : DATASETS)
+  useEffect(() => { setDataset(choices.find((s) => s.available !== false)?.file ?? '') }, [contractName, sources])
 
   if (!open) return null
 
@@ -34,7 +38,7 @@ export default function NewRunModal() {
           className="w-full rounded border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink focus:border-ink-faint focus:outline-none"
         >
           {choices.map((d) => (
-            <option key={d.file} value={d.file}>
+            <option key={d.file} value={d.file} disabled={!d.available}>
               {d.label}
             </option>
           ))}
@@ -48,8 +52,8 @@ export default function NewRunModal() {
             Cancel
           </button>
           <button
-            onClick={() => trigger(choices.some((d) => d.file === dataset) ? dataset : choices[0].file)}
-            disabled={triggering}
+            onClick={() => trigger(dataset)}
+            disabled={triggering || !dataset}
             className="rounded border border-signal bg-signal/15 px-3 py-1.5 text-xs font-medium text-signal hover:bg-signal/25 disabled:opacity-50"
           >
             {triggering ? 'starting…' : 'Run'}

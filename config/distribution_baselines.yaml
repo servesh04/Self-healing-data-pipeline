@@ -1,0 +1,16 @@
+baselines:
+  default/orders:
+    version: orders-revenue-v1
+    collected_from: '2024-01-01'
+    collected_through: '2024-02-19'
+    source_id: day1_clean.csv
+    minimum_rows: 30
+    max_missing_fraction: 0.2
+    median_shift_iqr_limit: 3.0
+    columns:
+      revenue:
+        count: 50
+        missing_count: 0
+        q1: 605.7825
+        median: 1161.565
+        q3: 1717.3475

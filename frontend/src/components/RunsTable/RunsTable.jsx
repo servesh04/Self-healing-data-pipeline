@@ -5,6 +5,7 @@ import { formatDuration, formatConfidence, formatTime } from '../../lib/format'
 const FILTER_CHIPS = [
   [null, 'All'],
   ['healed', 'Healed'],
+  ['alert', 'Alert'],
   ['escalated', 'Escalated'],
   ['awaiting_approval', 'Awaiting'],
   ['clean', 'Clean'],

@@ -26,6 +26,7 @@ from graph.nodes.spec_rename import spec_rename
 from graph.nodes.spec_type import spec_type
 from graph.nodes.spec_value import spec_value
 from graph.nodes.multi_specialist import multi_specialist
+from graph.nodes.monitor_distribution import monitor_distribution
 from graph.routing import (
     route_after_confidence,
     route_after_diagnose,
@@ -54,13 +55,14 @@ def build_graph(checkpointer):
     g.add_node("rerun_validate", rerun_validate)
     g.add_node("escalate", escalate)
     g.add_node("commit_report", commit_report)
+    g.add_node("monitor_distribution", monitor_distribution)
 
     g.add_edge(START, "run_pipeline")
 
     g.add_conditional_edges(
         "run_pipeline",
         route_after_run,
-        {"commit_report": "commit_report", "profile_source": "profile_source"},
+        {"commit_report": "monitor_distribution", "profile_source": "profile_source"},
     )
     g.add_edge("profile_source", "diff_contract")
     g.add_edge("diff_contract", "diagnose")
@@ -100,12 +102,13 @@ def build_graph(checkpointer):
         "rerun_validate",
         route_after_rerun,
         {
-            "commit_report": "commit_report",
+            "commit_report": "monitor_distribution",
             "diff_contract": "diff_contract",  # ← THE HEAL CYCLE
             "escalate": "escalate",
         },
     )
 
+    g.add_edge("monitor_distribution", "commit_report")
     g.add_edge("commit_report", END)
     g.add_edge("escalate", END)
 

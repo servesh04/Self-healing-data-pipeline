@@ -20,17 +20,29 @@ export const useRunStore = create((set, get) => ({
   contractName: 'default',
   scopeRevision: 0,
   contracts: [],
+  sources: [],
   async fetchContracts() {
     try { const { contracts } = await api.getContracts(); set({ contracts }) } catch { /* keep default */ }
+  },
+  async fetchSources() {
+    const contractName = get().contractName
+    const revision = get().scopeRevision
+    try {
+      const { sources } = await api.getSources(contractName)
+      if (get().scopeRevision === revision) set({ sources })
+    } catch {
+      if (get().scopeRevision === revision) set({ sources: [] })
+    }
   },
   setContractName(contractName) {
     get().stopPolling()
     set((s) => ({ contractName, scopeRevision: s.scopeRevision + 1,
-      runs: [], overviewRuns: [], mappingHistory: [],
+      runs: [], overviewRuns: [], mappingHistory: [], sources: [],
       selectedRunId: null, detail: null,
       analytics: { ...s.analytics, summary: null, confidence: [], driftDistribution: [],
         specialistPerformance: [], componentMetrics: null, error: null } }))
     get().fetchRuns()
+    get().fetchSources()
     get().fetchOverviewRuns()
     get().fetchAnalytics()
     get().fetchMappingHistory()

@@ -43,6 +43,7 @@ ALL_NODE_NAMES = {
     "rerun_validate",
     "escalate",
     "commit_report",
+    "monitor_distribution",
 }
 
 

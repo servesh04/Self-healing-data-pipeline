@@ -8,6 +8,7 @@ export default function TopBar() {
   const contracts = useRunStore((s) => s.contracts)
   const contractName = useRunStore((s) => s.contractName)
   const fetchContracts = useRunStore((s) => s.fetchContracts)
+  const fetchSources = useRunStore((s) => s.fetchSources)
   const setContractName = useRunStore((s) => s.setContractName)
 
   useEffect(() => {
@@ -15,7 +16,8 @@ export default function TopBar() {
       .then((r) => setAppEnv(r.env))
       .catch(() => {})
     fetchContracts()
-  }, [fetchContracts])
+    fetchSources()
+  }, [fetchContracts, fetchSources])
 
   return (
     <header className="border-b border-line bg-surface">

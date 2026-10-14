@@ -58,10 +58,23 @@ function loopPath(from, to) {
   }
 }
 
+function cleanMonitorPath(from, to) {
+  // The clean pass bypasses all diagnosis nodes along the left margin.
+  const left = 38
+  const fx = from.x - NODE_W / 2
+  const ty = to.y
+  return {
+    d: `M ${fx} ${from.y} H ${left} V ${ty} H ${to.x - NODE_W / 2}`,
+    labelX: left + 4,
+    labelY: from.y + 38,
+  }
+}
+
 function edgeGeometry(edge) {
   const from = NODE_BY_ID[edge.from]
   const to = NODE_BY_ID[edge.to]
   if (edge.type === 'loop') return loopPath(from, to)
+  if (edge.type === 'monitor_clean') return cleanMonitorPath(from, to)
   if (edge.type === 'curve') return curvePath(from, to, edge.side)
   return straightPath(from, to)
 }
@@ -77,6 +90,17 @@ function nodeStatus(id, visited, activeNode) {
   if (id === activeNode) return 'active'
   if (visited.has(id)) return 'done'
   return 'idle'
+}
+
+function edgeVisited(edge, visited, detail) {
+  if (!visited.has(edge.from) || !visited.has(edge.to)) return false
+  if (edge.from === 'run_pipeline' && edge.to === 'monitor_distribution') {
+    return !visited.has('profile_source')
+  }
+  if (edge.from === 'rerun_validate' && edge.to === 'monitor_distribution') {
+    return (detail?.heal_attempts ?? 0) > 0
+  }
+  return true
 }
 
 export default function GraphCanvas({ detail }) {
@@ -127,7 +151,7 @@ export default function GraphCanvas({ detail }) {
         {EDGES.map((edge) => {
           const geom = edgeGeometry(edge)
           const isLoop = edge.type === 'loop'
-          const bothVisited = visited.has(edge.from) && visited.has(edge.to)
+          const bothVisited = edgeVisited(edge, visited, detail)
           return (
             <g key={`${edge.from}->${edge.to}`}>
               <path

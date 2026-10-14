@@ -11,7 +11,8 @@ export const NODE_H = 46
 
 export const NODES = [
   { id: 'run_pipeline', label: 'run_pipeline', x: 500, y: 40, kind: 'process' },
-  { id: 'commit_report', label: 'commit_report', x: 160, y: 150, kind: 'terminal' },
+  { id: 'monitor_distribution', label: 'monitor_distribution', x: 160, y: 690, kind: 'process' },
+  { id: 'commit_report', label: 'commit_report', x: 160, y: 790, kind: 'terminal' },
   { id: 'profile_source', label: 'profile_source', x: 500, y: 150, kind: 'process' },
   { id: 'diff_contract', label: 'diff_contract', x: 500, y: 240, kind: 'process' },
   { id: 'diagnose', label: 'diagnose', x: 500, y: 330, kind: 'llm' },
@@ -33,7 +34,7 @@ export const NODE_BY_ID = Object.fromEntries(NODES.map((n) => [n.id, n]))
 // drawn distinctly and highlighted whenever heal_attempts > 0)
 export const EDGES = [
   { from: 'run_pipeline', to: 'profile_source', type: 'straight' },
-  { from: 'run_pipeline', to: 'commit_report', type: 'curve', label: 'pass', side: 'left' },
+  { from: 'run_pipeline', to: 'monitor_distribution', type: 'monitor_clean', label: 'schema pass' },
   { from: 'profile_source', to: 'diff_contract', type: 'straight' },
   { from: 'diff_contract', to: 'diagnose', type: 'straight' },
   { from: 'diagnose', to: 'spec_rename', type: 'straight' },
@@ -53,7 +54,8 @@ export const EDGES = [
   { from: 'human_approval', to: 'apply_patch', type: 'straight', label: 'approve' },
   { from: 'human_approval', to: 'escalate', type: 'straight', label: 'reject' },
   { from: 'apply_patch', to: 'rerun_validate', type: 'straight' },
-  { from: 'rerun_validate', to: 'commit_report', type: 'curve', label: 'pass', side: 'left' },
+  { from: 'rerun_validate', to: 'monitor_distribution', type: 'straight', label: 'schema pass' },
+  { from: 'monitor_distribution', to: 'commit_report', type: 'straight' },
   { from: 'rerun_validate', to: 'diff_contract', type: 'loop', label: 'fail, < 3' },
   { from: 'rerun_validate', to: 'escalate', type: 'curve', label: 'cap', side: 'right' },
 ]
@@ -67,13 +69,13 @@ export function deriveVisited(detail) {
   const visited = new Set(['run_pipeline'])
   if (!detail) return visited
 
-  const everDrifted =
+  const schemaDrifted =
     detail.heal_attempts > 0 ||
     (detail.drift_items && detail.drift_items.length > 0) ||
     detail.drift_class != null ||
-    detail.status !== 'clean'
+    (detail.assertions_passed === false && detail.status === 'escalated')
 
-  if (everDrifted && detail.status !== 'clean') {
+  if (schemaDrifted) {
     visited.add('profile_source')
     visited.add('diff_contract')
   }
@@ -96,10 +98,13 @@ export function deriveVisited(detail) {
   if (detail.awaiting_approval || detail.human_decision) {
     visited.add('human_approval')
   }
-  if (detail.status === 'healed' || detail.status === 'clean') {
+  if (detail.monitor_completed) {
+    visited.add('monitor_distribution')
+  }
+  if (detail.status === 'healed' || detail.status === 'clean' || detail.status === 'alert' || detail.monitor_completed) {
     visited.add('commit_report')
   }
-  if (detail.status === 'escalated') {
+  if (detail.status === 'escalated' && !detail.monitor_completed) {
     visited.add('escalate')
   }
   // Every completed heal attempt proves at least one more lap through the

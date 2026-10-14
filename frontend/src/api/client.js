@@ -56,11 +56,11 @@ export const listRuns = ({ limit, status, dataset, contractName = 'default' } = 
   const qs = params.toString()
   return request(`/api/runs${qs ? `?${qs}` : ''}`)
 }
-export const triggerRun = (sourcePath, contractName = 'default') =>
+export const triggerRun = (sourceId, contractName = 'default') =>
   request('/api/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source_path: sourcePath, contract_name: contractName }),
+    body: JSON.stringify({ source_id: sourceId, contract_name: contractName }),
   })
 export const getRun = (runId) => request(`/api/runs/${runId}`)
 export const approveRun = (runId, note) =>
@@ -76,6 +76,7 @@ export const rejectRun = (runId, note) =>
     body: JSON.stringify({ note: note ?? null }),
   })
 export const getContracts = () => request('/api/config/contracts')
+export const getSources = (contractName = 'default') => request(`/api/config/sources?contract_name=${encodeURIComponent(contractName)}`)
 export const getCurrentMapping = (contractName = 'default') => request(`/api/config/mapping?contract_name=${encodeURIComponent(contractName)}`)
 export const getMappingHistory = (limit = 50, contractName = 'default') => request(`/api/config/mapping/history?limit=${limit}&contract_name=${encodeURIComponent(contractName)}`)
 

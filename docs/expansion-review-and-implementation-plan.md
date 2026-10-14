@@ -1,6 +1,6 @@
 # Expansion review and implementation plan (P0–P3)
 
-**Status:** P0 committed and verified on 13 October 2026. P1 is implemented and verified on `codex/p1-contract-isolation` against the configured Postgres database, LLM, local API, and browser UI; deployment and independent-label calibration remain future gates. P2–P3 remain planned. The P1 isolated full-graph evaluation passed 11/11 fixtures.
+**Status:** P0 committed and verified on 13 October 2026. P1 is committed and verified against Postgres, the LLM, local API, and browser UI. P2 is implemented and locally verified on `codex/p2-monitoring-sources-examples`; P3 remains planned. Deployment, independently labeled example comparison, and adaptive-threshold calibration remain future gates.
 **Inputs:** the three-direction proposal, `docs/design-p0-value-drift-multi-patch.md`, and the current repository.
 **Decision:** The directions are useful. The P0 implementation follows the corrections below; the later phases retain their proposed order and verification gates.
 
@@ -85,6 +85,8 @@ The current P0 design doc remains a useful starting sketch. Its claims that no f
 3. **Approval examples (2D).** Record approval/rejection after `interrupt()` resumes, idempotently keyed by run and proposal so replay cannot duplicate it. Store rationale, contract, finding shape and final validation outcome. Review/redact sample data before prompt inclusion. Retrieve only same-contract, same-specialist, labeled, relevant examples with capped text and deterministic ranking; treat them as untrusted data in prompts. Compare blinded/held-out proposal quality with and without examples before enabling retrieval by default.
 
 **P2 verification gate:** clean-but-shifted day8 alerts without patching; controls do not alert; database sample and full validation agree on row counts and failures, including a fault beyond row 1000; unknown source/table requests fail closed; approval events are idempotent across resume/restart and examples cannot supply patch operations outside the specialist schema.
+
+**P2 verification (14 October 2026):** The 147-test local suite, frontend production build, and isolated live database/LLM full-graph regression (11/11 fixtures) passed. In an isolated live Postgres/API scope, day8's revenue shift alerted while schema assertions passed and no mapping was written; normal and low-sample controls stayed clean, with the latter explicitly skipped by the monitor. A named table with 1,002 ordered rows ran clean; changing row 1,002 caused full validation to escalate, and increasing it to 5,001 rows returned 422 at the configured cap. Snapshot recovery from the database reproduced the original digest after deleting the local cache. An ambiguous proposal paused, survived a backend restart, resumed to healed, and persisted one decision; duplicate approval returned the same result and conflicting rejection returned 409. Browser checks covered the source picker, graph monitor path, alert filter, approval history and contract isolation with zero page errors. The existing dashboard mapping pointer was unchanged; the temporary table was removed. Approval examples remain disabled until independently labeled held-out comparison, and deployment is a separate release gate.
 
 ### P3 — Temporal monitoring, date parsing, and JSON normalization
 

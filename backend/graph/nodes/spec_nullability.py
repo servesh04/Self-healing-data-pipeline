@@ -19,6 +19,7 @@ from graph.schemas import NullabilitySpecialistOutput, normalize_llm_json
 from pipeline.mapping import NULL_POLICY_REGISTRY
 from prompts.prompts import SPEC_NULLABILITY_SYSTEM, SPEC_NULLABILITY_USER_TEMPLATE
 from services.llm import LLMError, call_json
+from services.approval_examples import example_context
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ async def spec_nullability(state: dict) -> dict:
         source_profile=json.dumps(state.get("source_profile") or {}, indent=2),
         diagnosis=state.get("diagnosis") or "",
     )
+    user_prompt += await example_context(state, "spec_nullability")
 
     try:
         raw = await call_json(system_prompt, user_prompt)

@@ -14,13 +14,14 @@ between heal attempts.
 import pandas as pd
 
 from pipeline.contract import contract_for_state
+from pipeline.sources import profile_frame
 
 MAX_DISTINCT = 32
 
 
 def profile_source(state: dict) -> dict:
     try:
-        df = pd.read_csv(state["source_path"])
+        df = profile_frame(state["source_path"])
     except Exception as exc:
         return {
             "actual_schema": {},
@@ -46,4 +47,5 @@ def profile_source(state: dict) -> dict:
                 str(k): int(v) for k, v in counts.head(MAX_DISTINCT).items()
             }
 
+    profile["__sample__"] = {"rows": len(df), "limit": 1000}
     return {"actual_schema": schema, "source_profile": profile}

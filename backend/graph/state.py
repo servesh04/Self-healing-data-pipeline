@@ -85,6 +85,17 @@ class HealState(TypedDict):
     mapping_version_read: Optional[int]
     mapping_version_written: Optional[int]
     source_sha256: Optional[str]
+    source_family: Optional[str]
+    source_ref: Optional[dict]
+    distribution_alerts: list[dict]
+    distribution_skipped: list[dict]
+    distribution_profile: dict
+    distribution_baseline_id: Optional[str]
+    distribution_baseline_version: Optional[str]
+    distribution_baseline_digest: Optional[str]
+    distribution_baseline: Optional[dict]
+    monitor_error: Optional[str]
+    monitor_completed: bool
     patch_error: Optional[str]
     proposal_error: Optional[str]
     components: list[dict]

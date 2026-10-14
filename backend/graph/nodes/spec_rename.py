@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from graph.schemas import RenameSpecialistOutput, normalize_llm_json
 from prompts.prompts import SPEC_RENAME_SYSTEM, SPEC_RENAME_USER_TEMPLATE
 from services.llm import LLMError, call_json
+from services.approval_examples import example_context
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ async def spec_rename(state: dict) -> dict:
         source_profile=json.dumps(state.get("source_profile") or {}, indent=2),
         diagnosis=state.get("diagnosis") or "",
     )
+    user_prompt += await example_context(state, "spec_rename")
 
     try:
         raw = await call_json(SPEC_RENAME_SYSTEM, user_prompt)

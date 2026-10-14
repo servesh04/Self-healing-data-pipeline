@@ -265,6 +265,7 @@ _STUB_NAMES = (
     "propose_patch",
     "apply_patch",
     "rerun_validate",
+    "monitor_distribution",
 )
 
 
@@ -356,6 +357,9 @@ def _default_stub_bodies() -> dict:
             "history": [attempt],
         }
 
+    def monitor_distribution(state):
+        return {"distribution_alerts": [], "distribution_skipped": []}
+
     return {
         "run_pipeline": run_pipeline,
         "profile_source": profile_source,
@@ -369,6 +373,7 @@ def _default_stub_bodies() -> dict:
         "propose_patch": propose_patch,
         "apply_patch": apply_patch,
         "rerun_validate": rerun_validate,
+        "monitor_distribution": monitor_distribution,
     }
 
 

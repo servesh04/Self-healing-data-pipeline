@@ -62,6 +62,69 @@ mapping request so it cannot accidentally run against a different scope.
 
 ---
 
+## Expansion P2 status (implemented and verified locally)
+
+The graph now checks a reviewed distribution baseline after both clean schema
+validation and a successful repair. `default/orders` baseline version
+`orders-revenue-v1` stores the day1 sample size, missingness, quartiles, IQR,
+and collection window. A run checkpoints the baseline spec and SHA-256 digest
+before execution. A median more than three baseline IQRs away alerts without
+writing a mapping. The monitor requires 30 valid rows and at most 20% missing
+numeric values; insufficient samples and missing baselines are shown as skipped.
+Day8's 10× revenue fixture alerts, a 5% variance control stays clean, and a
+25-row shifted fixture passes the schema contract but skips monitoring. These
+synthetic controls establish a provisional threshold; use held-out real batches
+before treating it as a production statistical policy. Alerts never update the
+baseline.
+
+`POST /api/runs` accepts a `source_id` from `GET /api/config/sources`; the old
+`source_path` field still accepts a bundled CSV ID for older clients. The
+allowlist in `config/sources.yaml` defines `orders_table_demo`, with its table,
+schema, deterministic ordering key, row cap (5,000), byte cap (10 MiB), and
+10-second SQL statement timeout. Set `P2_SOURCE_DATABASE_URL` in the backend
+process environment to expose it. Give that connection a separate role with
+SELECT only on the named table. The API accepts no SQL, table name, filesystem
+path, or connection string from clients. The table is read in a read-only,
+repeatable-read transaction ordered by a unique non-null key. Up to 1,000
+ordered rows supply the source profile, while Pandera validates the complete
+captured batch. Over-cap tables fail before a run is registered. Snapshot bytes
+and their digest are stored in `source_snapshots`; a missing local cache is
+restored after process or host restart, and a changed cache fails closed. The
+application's regular database connection stores snapshots; it should retain
+them through the run's audit retention period.
+
+Human approval decisions are stored once per run attempt with the proposal
+hash, note, contract, shape of findings, and eventual validation outcome.
+Concurrent same-decision requests dispatch one resume; conflicts return 409.
+A per-run database advisory lock serializes an approval queued while the
+initial graph execution is still finishing its interrupt. Expired dispatch
+claims can be retried after a process crash only when that execution lock is
+free. The run detail shows approval history. Labeled examples require a
+same-environment, same-contract, same-specialist approved proposal with an
+independent positive correctness label and passing validation. Retrieval ranks
+matching check shapes deterministically, caps context, and excludes notes,
+sample values and patch operations. Prompt inclusion defaults off; set
+`ENABLE_APPROVAL_EXAMPLES=1` only after independent labels and a held-out
+comparison with `eval/compare_approval_examples.py`. The comparison script
+never writes a mapping or enables the feature itself.
+
+The 147-test local suite, frontend production build, and isolated 11/11 live
+database/LLM full-graph regression passed. An isolated live
+Postgres/API run confirmed the shifted day8 alert with no mapping write, clean
+normal and low-sample controls, a clean 1,002-row named table snapshot, an
+invalid value at row 1,002 detected by full validation, and a 5,001-row table
+rejected at the 5,000-row cap. Deleting the local snapshot cache and restoring
+from `source_snapshots` reproduced its digest. An approval paused, survived a
+backend restart, resumed to healed, and produced one durable decision; a repeat
+approval was idempotent and a conflicting rejection returned 409. Browser
+verification covered the monitor graph path, alert filter, source picker,
+contract isolation, and approval history without page errors. These checks ran
+in a fresh `PIPELINE_ENV`; the configured dashboard mapping pointer stayed at
+its prior version. The test table was removed afterward. Independent labels,
+held-out example quality comparison, and deployment remain separate gates.
+
+---
+
 ## Build status
 
 | Phase | Scope | Status |

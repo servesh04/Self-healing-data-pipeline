@@ -162,6 +162,9 @@ async def test_run_detail_audit_uses_stored_scope(monkeypatch):
         return []
     monkeypatch.setattr(store, "get_run_record", record)
     monkeypatch.setattr(store, "mapping_history_for_run", history)
+    async def approvals(_run_id):
+        return []
+    monkeypatch.setattr(store, "approval_history", approvals)
     result = await get_run("r1", graph_app=Graph())
     assert result["run_id"] == "r1"
     assert seen == [("r1", "isolated", "compact")]

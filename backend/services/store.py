@@ -333,6 +333,32 @@ async def init_runs_table() -> None:
         await conn.execute("alter table run_records add column if not exists mapping_version_written bigint")
         await conn.execute("update run_records set mapping_scope = 'mapping:' || pipeline_env || ':' || contract_name where mapping_scope is null")
         await conn.execute("create index if not exists idx_run_records_scope_created on run_records (pipeline_env, contract_name, created_at desc)")
+        await conn.execute("""create table if not exists source_snapshots (
+            run_id text primary key, source_id text not null, payload bytea not null,
+            sha256 text not null, row_count integer not null, profile_rows integer not null,
+            captured_at timestamptz not null default now())""")
+
+
+async def save_source_snapshot(run_id: str, source_id: str, payload: bytes, sha256: str,
+                               row_count: int, profile_rows: int) -> None:
+    async with get_pool().connection() as conn:
+        await conn.execute("""insert into source_snapshots
+            (run_id, source_id, payload, sha256, row_count, profile_rows)
+            values (%s, %s, %s, %s, %s, %s) on conflict (run_id) do nothing""",
+            (run_id, source_id, payload, sha256, row_count, profile_rows))
+
+
+async def load_source_snapshot(run_id: str, expected_sha256: str) -> bytes:
+    async with get_pool().connection() as conn:
+        cur = await conn.execute("select payload, sha256 from source_snapshots where run_id = %s", (run_id,))
+        row = await cur.fetchone()
+    if row is None or row["sha256"] != expected_sha256:
+        raise ValueError("source snapshot unavailable or changed")
+    import hashlib
+    payload = bytes(row["payload"])
+    if hashlib.sha256(payload).hexdigest() != expected_sha256:
+        raise ValueError("source snapshot digest mismatch")
+    return payload
 
 
 async def record_run(run_id: str, source_path: str, pipeline_env: str | None = None,
@@ -354,10 +380,10 @@ async def list_run_records(limit: int = 50, pipeline_env: str | None = None,
     env = _env(pipeline_env)
     async with get_pool().connection() as conn:
         if contract_name is None:
-            cur = await conn.execute("select run_id, source_path, pipeline_env, contract_name, contract_version, created_at from run_records where pipeline_env = %s order by created_at desc limit %s", (env, limit))
+            cur = await conn.execute("select run_id, source_path, source_ref, pipeline_env, contract_name, contract_version, created_at from run_records where pipeline_env = %s order by created_at desc limit %s", (env, limit))
         else:
             _contract(contract_name)
-            cur = await conn.execute("select run_id, source_path, pipeline_env, contract_name, contract_version, created_at from run_records where pipeline_env = %s and contract_name = %s order by created_at desc limit %s", (env, contract_name, limit))
+            cur = await conn.execute("select run_id, source_path, source_ref, pipeline_env, contract_name, contract_version, created_at from run_records where pipeline_env = %s and contract_name = %s order by created_at desc limit %s", (env, contract_name, limit))
         return list(await cur.fetchall())
 
 
@@ -390,6 +416,126 @@ async def init_component_tables() -> None:
             correct boolean not null, labeled_by text not null, note text,
             created_at timestamptz not null default now())""")
         await conn.execute("create index if not exists idx_component_events_scope on component_events (pipeline_env, contract_name, event_type)")
+        await conn.execute("""create table if not exists approval_decisions (
+            run_id text not null, attempt_no integer not null, proposal_hash text not null,
+            decision text not null, note text, pipeline_env text not null,
+            contract_name text not null, contract_version text,
+            finding_shape jsonb not null, final_status text,
+            validation_passed boolean, claimed_at timestamptz not null default now(),
+            lease_until timestamptz not null default now() + interval '60 seconds',
+            primary key (run_id, attempt_no))""")
+
+
+def proposal_hash(state: dict) -> str:
+    import hashlib
+    import json
+    payload = json.dumps(state.get("proposed_patch") or {}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def finding_shape(state: dict) -> list[dict]:
+    """No example values, row data, or free-form prompt text."""
+    return [{"kind": str(f.get("kind", "unknown"))[:40],
+             "check": str(f.get("check", "unknown"))[:80],
+             "column": str(f.get("column", ""))[:80],
+             "failure_count": int(f.get("failure_count", 0))}
+            for f in (state.get("drift_items") or [])[:20]]
+
+
+async def claim_approval(state: dict, decision: str, note: str | None) -> bool:
+    """Return true only for a new or expired claim that should dispatch resume."""
+    if decision not in {"approve", "reject"}:
+        raise ValueError("invalid approval decision")
+    run_id = state["run_id"]
+    attempt = int(state.get("heal_attempts", 0)) + 1
+    digest = proposal_hash(state)
+    async with get_pool().connection() as conn:
+        async with conn.transaction():
+            cur = await conn.execute("""insert into approval_decisions
+                (run_id, attempt_no, proposal_hash, decision, note, pipeline_env,
+                 contract_name, contract_version, finding_shape)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                on conflict (run_id, attempt_no) do nothing returning run_id""",
+                (run_id, attempt, digest, decision, note, state.get("pipeline_env") or _env(None),
+                 state.get("contract_name", "default"), state.get("contract_version"), Json(finding_shape(state))))
+            if await cur.fetchone():
+                return True
+            cur = await conn.execute("""select proposal_hash, decision,
+                lease_until < now() as lease_expired, final_status
+                from approval_decisions where run_id=%s and attempt_no=%s for update""", (run_id, attempt))
+            row = await cur.fetchone()
+            if row["proposal_hash"] != digest or row["decision"] != decision:
+                raise ValueError("conflicting approval decision for proposal")
+            if row["final_status"] or not row["lease_expired"]:
+                return False
+            # An expired lease is eligible for retry only when no process is
+            # still draining this graph. Session advisory locks disappear on
+            # process crash, unlike the durable decision row.
+            cur = await conn.execute("select pg_try_advisory_lock(hashtextextended(%s, 0)) as acquired", (run_id,))
+            acquired = (await cur.fetchone())["acquired"]
+            if not acquired:
+                return False
+            await conn.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", (run_id,))
+            await conn.execute("""update approval_decisions
+                set lease_until = now() + interval '60 seconds'
+                where run_id=%s and attempt_no=%s""", (run_id, attempt))
+            return True
+
+
+async def get_approval_decision(run_id: str) -> dict | None:
+    async with get_pool().connection() as conn:
+        cur = await conn.execute("""select * from approval_decisions where run_id=%s
+            order by attempt_no desc limit 1""", (run_id,))
+        return await cur.fetchone()
+
+
+async def approval_history(run_id: str) -> list[dict]:
+    async with get_pool().connection() as conn:
+        cur = await conn.execute("""select run_id, attempt_no, proposal_hash, decision,
+            note, pipeline_env, contract_name, contract_version, finding_shape,
+            final_status, validation_passed, claimed_at
+            from approval_decisions where run_id=%s order by attempt_no""", (run_id,))
+        return list(await cur.fetchall())
+
+
+async def labeled_approval_examples(pipeline_env: str, contract_name: str, specialist: str,
+                                    exclude_run_id: str, limit: int = 200) -> list[dict]:
+    """Retrieve reviewed positives only; never return patches or sample values."""
+    async with get_pool().connection() as conn:
+        cur = await conn.execute("""select e.id, e.run_id, e.specialist,
+            a.finding_shape, a.final_status
+            from component_events e
+            join approval_decisions a on a.run_id=e.run_id and a.attempt_no=e.attempt_no
+            join lateral (select correct from component_labels l where l.event_id=e.id
+                          order by l.id desc limit 1) label on true
+            where e.event_type='proposal' and e.pipeline_env=%s
+              and e.contract_name=%s and e.specialist=%s
+              and e.run_id<>%s and a.decision='approve' and a.validation_passed=true
+              and label.correct=true
+            order by e.id desc limit %s""",
+            (pipeline_env, contract_name, specialist, exclude_run_id, limit))
+        return list(await cur.fetchall())
+
+
+async def acquire_run_execution_lock(conn, run_id: str) -> bool:
+    # Blocking acquisition serializes a resume queued while the initial
+    # execution is still unwinding from interrupt(). A try-lock would drop
+    # that sole durable resume dispatch.
+    await conn.execute("select pg_advisory_lock(hashtextextended(%s, 0))", (run_id,))
+    return True
+
+
+async def release_run_execution_lock(conn, run_id: str) -> None:
+    await conn.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", (run_id,))
+
+
+async def record_approval_outcome(run_id: str, status: str, validation_passed: bool | None) -> None:
+    if status not in {"clean", "healed", "alert", "escalated"}:
+        return
+    async with get_pool().connection() as conn:
+        await conn.execute("""update approval_decisions set final_status=%s,
+            validation_passed=%s where run_id=%s and final_status is null""",
+            (status, validation_passed, run_id))
 
 
 async def record_component_event(state: dict, component_index: int, event_type: str,

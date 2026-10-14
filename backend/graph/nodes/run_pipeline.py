@@ -13,12 +13,14 @@ from pathlib import Path
 from pipeline.contract import contract_for_state
 from pipeline.runner import run_pipeline as run_the_pipeline
 from services import store
+from pipeline.sources import ensure_source_path
 
 log = logging.getLogger(__name__)
 
 
 async def run_pipeline(state: dict) -> dict:
     try:
+        await ensure_source_path(state)
         contract = contract_for_state(state)
         mapping, mapping_version = await store.get_current_mapping_version(state.get("pipeline_env"), contract.name, contract)
         source_hash = hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest()

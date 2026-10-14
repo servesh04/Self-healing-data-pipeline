@@ -18,6 +18,7 @@ from graph.schemas import TypeSpecialistOutput, normalize_llm_json
 from pipeline.mapping import CAST_REGISTRY
 from prompts.prompts import SPEC_TYPE_SYSTEM, SPEC_TYPE_USER_TEMPLATE
 from services.llm import LLMError, call_json
+from services.approval_examples import example_context
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ async def spec_type(state: dict) -> dict:
         source_profile=json.dumps(state.get("source_profile") or {}, indent=2),
         diagnosis=state.get("diagnosis") or "",
     )
+    user_prompt += await example_context(state, "spec_type")
 
     try:
         raw = await call_json(system_prompt, user_prompt)

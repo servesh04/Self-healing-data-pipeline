@@ -16,6 +16,7 @@ from pathlib import Path
 from pipeline.contract import contract_for_state
 from pipeline.runner import run_pipeline as run_the_pipeline
 from services import store
+from pipeline.sources import ensure_source_path
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ async def rerun_validate(state: dict) -> dict:
     rollback_version = None
     rollback_reason = None
     try:
+        await ensure_source_path(state)
         if hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest() != state.get("source_sha256"):
             raise ValueError("source changed since preflight")
         contract = contract_for_state(state)

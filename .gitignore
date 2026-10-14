@@ -29,3 +29,5 @@ Thumbs.db
 # ── Run artefacts ────────────────────────────────────────────────────────
 eval/results/*
 !eval/results/.gitkeep
+.run_snapshots/
+.p2-test-deps/

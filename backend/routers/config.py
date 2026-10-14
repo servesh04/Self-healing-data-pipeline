@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from auth import require_token
 from services import store
 from pipeline.contract import get_registry
+from pipeline.sources import list_sources
 
 router = APIRouter(prefix="/api/config", tags=["config"], dependencies=[Depends(require_token)])
 
@@ -44,3 +45,12 @@ async def list_contracts() -> dict:
     registry = get_registry()
     return {"contracts": [{"name": name, "version": registry.get(name).version,
                             "columns": list(registry.get(name).expected_dtypes)} for name in registry.names()]}
+
+
+@router.get("/sources")
+async def get_sources(contract_name: str = Query("default")) -> dict:
+    try:
+        get_registry().get(contract_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"sources": list_sources(contract_name)}
