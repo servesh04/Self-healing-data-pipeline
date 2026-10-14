@@ -19,6 +19,7 @@ every request costs one metadata SELECT, not a real setup re-run.
 """
 
 import logging
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -29,7 +30,9 @@ from pydantic import BaseModel
 from auth import require_token
 from graph.state import RECURSION_LIMIT
 from services import checkpointer, store
-from services.analytics import collect_run_summaries
+from services.analytics import collect_run_summaries, invalidate_run_summaries
+from pipeline.contract import get_registry
+from config import get_settings
 
 log = logging.getLogger(__name__)
 
@@ -39,19 +42,31 @@ log = logging.getLogger(__name__)
 # knowledge into the frontend or building a real upload flow neither Phase 5
 # nor the demo needs.
 DATA_SOURCES_DIR = Path(__file__).resolve().parents[2] / "data" / "sources"
+_schema_ready = False
+_schema_lock = asyncio.Lock()
 
 
 def _resolve_source_path(source_path: str) -> str:
     candidate = Path(source_path)
-    if candidate.is_absolute() or candidate.exists():
-        return str(candidate)
-    return str(DATA_SOURCES_DIR / candidate.name)
+    if candidate.name != source_path or candidate.suffix.lower() != ".csv":
+        raise HTTPException(status_code=422, detail="source_path must be an available CSV source ID")
+    resolved = (DATA_SOURCES_DIR / source_path).resolve()
+    if resolved.parent != DATA_SOURCES_DIR.resolve() or not resolved.is_file():
+        raise HTTPException(status_code=422, detail="unknown CSV source ID")
+    return str(resolved)
 
 
 async def _ensure_checkpointer_ready() -> None:
+    global _schema_ready
     try:
         await checkpointer.setup_checkpointer()
-        await store.init_runs_table()  # same cold-start class; same fix
+        if not _schema_ready:
+            async with _schema_lock:
+                if not _schema_ready:
+                    await store.init_mapping_table()
+                    await store.init_runs_table()
+                    await store.init_component_tables()
+                    _schema_ready = True
     except Exception:
         log.exception("runs: startup retry failed")
         raise HTTPException(status_code=503, detail="checkpoint store unavailable, try again")
@@ -66,16 +81,28 @@ router = APIRouter(
 
 class TriggerRunRequest(BaseModel):
     source_path: str
+    contract_name: str = "default"
 
 
 class ApprovalRequest(BaseModel):
     note: str | None = None
 
 
-def _blank_state(run_id: str, source_path: str) -> dict:
+def _blank_state(run_id: str, source_path: str, contract_name: str = "default",
+                 contract_version: str | None = None, contract_snapshot: dict | None = None,
+                 pipeline_env: str | None = None) -> dict:
     return {
         "run_id": run_id,
         "source_path": source_path,
+        "contract_name": contract_name,
+        "contract_version": contract_version,
+        "contract_snapshot": contract_snapshot,
+        "pipeline_env": pipeline_env,
+        "mapping_scope": f"mapping:{pipeline_env}:{contract_name}" if pipeline_env else None,
+        "baseline_failures": [],
+        "rollback_version": None,
+        "rollback_reason": None,
+        "audit_error": None,
         "assertions_passed": False,
         "assertion_failures": [],
         "rows_in": 0,
@@ -114,7 +141,8 @@ def _graph_app(request: Request):
     return request.app.state.graph_app
 
 
-async def _execute(graph_app, run_id: str, stream_input) -> None:
+async def _execute(graph_app, run_id: str, stream_input,
+                   pipeline_env: str | None = None, contract_name: str = "default") -> None:
     """Drains the graph's stream to completion — a pause at an interrupt and
     a terminal node both end the stream the same way. Runs detached from the
     triggering request; the client polls GET /api/runs/{run_id}.
@@ -133,6 +161,8 @@ async def _execute(graph_app, run_id: str, stream_input) -> None:
                 log.info("run %s: node %r fired", run_id, node_name)
     except Exception:
         log.exception("run %s: background execution failed", run_id)
+    finally:
+        invalidate_run_summaries(pipeline_env, contract_name)
 
 
 def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = None) -> dict:
@@ -176,8 +206,17 @@ async def trigger_run(
 ) -> dict:
     run_id = str(uuid.uuid4())
     source_path = _resolve_source_path(body.source_path)
-    await store.record_run(run_id, source_path)
-    background.add_task(_execute, graph_app, run_id, _blank_state(run_id, source_path))
+    try:
+        contract = get_registry().get(body.contract_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    env = get_settings().pipeline_env
+    await store.record_run(run_id, source_path, env, contract.name, contract.version,
+                           {"kind": "bundled_csv", "source_id": body.source_path})
+    invalidate_run_summaries(env, contract.name)
+    background.add_task(_execute, graph_app, run_id,
+                        _blank_state(run_id, source_path, contract.name, contract.version, contract.spec, env),
+                        env, contract.name)
     return {"run_id": run_id}
 
 
@@ -187,6 +226,7 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=500),
     status: str | None = Query(None, description="filter: clean/healed/escalated/awaiting_approval/running"),
     dataset: str | None = Query(None, description="filter: dataset filename, e.g. day4_combo.csv"),
+    contract_name: str = Query("default"),
 ) -> dict:
     """Enumerates run_records (the lightweight index, not the checkpointer)
     via collect_run_summaries — the same checkpointer-backed aggregation the
@@ -200,7 +240,11 @@ async def list_runs(
     dataset are both derived fields (status can reflect a live interrupt;
     dataset is the source_path's basename), not raw columns to filter on.
     """
-    runs = await collect_run_summaries(graph_app)
+    try:
+        get_registry().get(contract_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runs = await collect_run_summaries(graph_app, contract_name=contract_name)
     if status:
         runs = [r for r in runs if r["status"] == status]
     if dataset:
@@ -222,6 +266,8 @@ async def list_runs(
                 "approved_by": r["approved_by"],
                 "duration_ms": r["duration_ms"],
                 "created_at": r["created_at"],
+                "contract_name": r["contract_name"],
+                "contract_version": r["contract_version"],
             }
             for r in runs
         ]
@@ -233,7 +279,13 @@ async def get_run(run_id: str, graph_app=Depends(_graph_app)) -> dict:
     snapshot = await graph_app.aget_state({"configurable": {"thread_id": run_id}})
     if not snapshot.values:
         raise HTTPException(status_code=404, detail="run not found")
-    audit = await store.mapping_history_for_run(run_id)
+    record = await store.get_run_record(run_id)
+    # Checkpoints may predate run_records. New runs use the stored scope;
+    # historical checkpoint-only runs retain their default-scope audit.
+    values = snapshot.values
+    env = record["pipeline_env"] if record else values.get("pipeline_env")
+    contract_name = record["contract_name"] if record else values.get("contract_name", "default")
+    audit = await store.mapping_history_for_run(run_id, env, contract_name=contract_name)
     return _serialize_state(run_id, snapshot, mapping_audit=audit)
 
 
@@ -254,9 +306,19 @@ async def _resume(
             detail=f"run is not awaiting approval (next={list(snapshot.next)})",
         )
 
+    state = dict(snapshot.values)
+    for index in range(len(state.get("components") or [{}])):
+        await store.record_component_event(state, index, "decision",
+            decision="human_approved" if decision == "approve" else "human_rejected", detail=note)
+        if decision == "reject":
+            await store.record_component_event(state, index, "outcome",
+                detail="human rejected before mapping write", attempt_no=state.get("heal_attempts", 0) + 1)
+
     background.add_task(
-        _execute, graph_app, run_id, Command(resume={"decision": decision, "note": note})
+        _execute, graph_app, run_id, Command(resume={"decision": decision, "note": note}),
+        snapshot.values.get("pipeline_env"), snapshot.values.get("contract_name", "default")
     )
+    invalidate_run_summaries(snapshot.values.get("pipeline_env"), snapshot.values.get("contract_name", "default"))
     return {"run_id": run_id, "resumed_with": decision}
 
 

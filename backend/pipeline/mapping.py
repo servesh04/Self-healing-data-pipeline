@@ -17,7 +17,7 @@ Python.
 from typing import Callable
 
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
 from pipeline.contract import load_contract
 
@@ -71,8 +71,9 @@ class MappingPatch(BaseModel):
 
     @field_validator("value_maps")
     @classmethod
-    def _valid_value_maps(cls, value_maps: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
-        allowed = load_contract().allowed_values
+    def _valid_value_maps(cls, value_maps: dict[str, dict[str, str]], info: ValidationInfo) -> dict[str, dict[str, str]]:
+        contract = (info.context or {}).get("contract") or load_contract()
+        allowed = contract.allowed_values
         for column, replacements in value_maps.items():
             if column not in allowed or not replacements:
                 raise ValueError(f"value map requires an allowed-value column: {column}")

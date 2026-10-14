@@ -21,13 +21,13 @@ class MappingStore:
         self.writes = 0
         self.fail_cas = False
 
-    async def get_current_mapping(self):
+    async def get_current_mapping(self, *args, **kwargs):
         return self.mapping
 
-    async def get_current_mapping_version(self):
+    async def get_current_mapping_version(self, *args, **kwargs):
         return self.mapping, self.version
 
-    async def get_mapping_by_version(self, version_id):
+    async def get_mapping_by_version(self, version_id, *args, **kwargs):
         if version_id != self.version:
             raise ValueError("version not found")
         return self.mapping
@@ -66,6 +66,9 @@ def graph_fixture(monkeypatch, *, fail_type=False):
     monkeypatch.setattr(store, "get_current_mapping_version", memory.get_current_mapping_version)
     monkeypatch.setattr(store, "get_mapping_by_version", memory.get_mapping_by_version)
     monkeypatch.setattr(store, "save_mapping_cas", memory.save_mapping_cas)
+    async def record_event(*args, **kwargs):
+        return None
+    monkeypatch.setattr(store, "record_component_event", record_event)
 
     async def diagnose_llm(system, prompt):
         import json

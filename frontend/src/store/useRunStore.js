@@ -17,6 +17,24 @@ export const useRunStore = create((set, get) => ({
   // ── Navigation — no router; 3 base pages plus a run-detail overlay that
   // remembers which page to return to (DASHBOARD.md's app shell nav). ──
   currentPage: 'overview', // 'overview' | 'runs' | 'mapping'
+  contractName: 'default',
+  scopeRevision: 0,
+  contracts: [],
+  async fetchContracts() {
+    try { const { contracts } = await api.getContracts(); set({ contracts }) } catch { /* keep default */ }
+  },
+  setContractName(contractName) {
+    get().stopPolling()
+    set((s) => ({ contractName, scopeRevision: s.scopeRevision + 1,
+      runs: [], overviewRuns: [], mappingHistory: [],
+      selectedRunId: null, detail: null,
+      analytics: { ...s.analytics, summary: null, confidence: [], driftDistribution: [],
+        specialistPerformance: [], componentMetrics: null, error: null } }))
+    get().fetchRuns()
+    get().fetchOverviewRuns()
+    get().fetchAnalytics()
+    get().fetchMappingHistory()
+  },
 
   runs: [],
   runsLoading: false,
@@ -41,6 +59,7 @@ export const useRunStore = create((set, get) => ({
     confidence: [],
     driftDistribution: [],
     specialistPerformance: [],
+    componentMetrics: null,
     loading: false,
     error: null,
   },
@@ -63,47 +82,56 @@ export const useRunStore = create((set, get) => ({
 
   async fetchRuns(filterOverride) {
     const filter = filterOverride ?? get().runsFilter
+    const contractName = get().contractName
+    const revision = get().scopeRevision
     set({ runsLoading: true, runsError: null, runsFilter: filter })
     try {
-      const { runs } = await api.listRuns({ limit: 200, status: filter.status, dataset: filter.dataset })
-      set({ runs, runsLoading: false })
+      const { runs } = await api.listRuns({ limit: 200, status: filter.status, dataset: filter.dataset, contractName })
+      if (get().scopeRevision === revision) set({ runs, runsLoading: false })
     } catch (err) {
-      set({ runsError: err.message, runsLoading: false })
+      if (get().scopeRevision === revision) set({ runsError: err.message, runsLoading: false })
     }
   },
 
   async fetchOverviewRuns() {
+    const contractName = get().contractName
+    const revision = get().scopeRevision
     set({ overviewRunsLoading: true })
     try {
-      const { runs } = await api.listRuns({ limit: 14 })
-      set({ overviewRuns: runs, overviewRunsLoading: false })
+      const { runs } = await api.listRuns({ limit: 14, contractName })
+      if (get().scopeRevision === revision) set({ overviewRuns: runs, overviewRunsLoading: false })
     } catch {
-      set({ overviewRunsLoading: false })
+      if (get().scopeRevision === revision) set({ overviewRunsLoading: false })
     }
   },
 
   async fetchAnalytics() {
+    const contractName = get().contractName
+    const revision = get().scopeRevision
     set((s) => ({ analytics: { ...s.analytics, loading: true, error: null } }))
     try {
-      const [summary, confidence, driftDistribution, specialistPerformance] = await Promise.all([
-        api.getAnalyticsSummary(),
-        api.getAnalyticsConfidence(),
-        api.getAnalyticsDriftDistribution(),
-        api.getAnalyticsSpecialistPerformance(),
+      const [summary, confidence, driftDistribution, specialistPerformance, componentMetrics] = await Promise.all([
+        api.getAnalyticsSummary(contractName),
+        api.getAnalyticsConfidence(contractName),
+        api.getAnalyticsDriftDistribution(contractName),
+        api.getAnalyticsSpecialistPerformance(contractName),
+        api.getComponentMetrics(contractName),
       ])
-      set({ analytics: { summary, confidence, driftDistribution, specialistPerformance, loading: false, error: null } })
+      if (get().scopeRevision === revision) set({ analytics: { summary, confidence, driftDistribution, specialistPerformance, componentMetrics, loading: false, error: null } })
     } catch (err) {
-      set((s) => ({ analytics: { ...s.analytics, loading: false, error: err.message } }))
+      if (get().scopeRevision === revision) set((s) => ({ analytics: { ...s.analytics, loading: false, error: err.message } }))
     }
   },
 
   async fetchMappingHistory() {
+    const contractName = get().contractName
+    const revision = get().scopeRevision
     set({ mappingHistoryLoading: true, mappingHistoryError: null })
     try {
-      const { history } = await api.getMappingHistory(100)
-      set({ mappingHistory: history, mappingHistoryLoading: false })
+      const { history } = await api.getMappingHistory(100, contractName)
+      if (get().scopeRevision === revision) set({ mappingHistory: history, mappingHistoryLoading: false })
     } catch (err) {
-      set({ mappingHistoryError: err.message, mappingHistoryLoading: false })
+      if (get().scopeRevision === revision) set({ mappingHistoryError: err.message, mappingHistoryLoading: false })
     }
   },
 
@@ -152,7 +180,7 @@ export const useRunStore = create((set, get) => ({
   async trigger(sourcePath) {
     set({ triggering: true, triggerError: null })
     try {
-      const { run_id } = await api.triggerRun(sourcePath)
+      const { run_id } = await api.triggerRun(sourcePath, get().contractName)
       set({ triggering: false, newRunOpen: false })
       await get().selectRun(run_id)
       return run_id

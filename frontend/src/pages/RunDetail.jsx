@@ -48,11 +48,21 @@ export default function RunDetail() {
       {detail?.source_path && (
         <p className="font-mono text-xs text-ink-faint">
           {detail.source_path.split(/[\\/]/).pop()}
+          <span className="ml-2 rounded border border-line-strong px-1.5 py-0.5 text-[10px] text-ink-muted">
+            {detail.contract_name || 'default'} · {detail.contract_version?.slice(0, 8) || 'legacy'}
+          </span>
+          {detail.mapping_scope && <span className="ml-2 text-[10px] text-ink-faint">{detail.mapping_scope}</span>}
           {detail.final_message && (
             <span className="ml-2 text-ink-muted">— {detail.final_message}</span>
           )}
         </p>
       )}
+      {detail?.rollback_reason && (
+        <p className="rounded border border-fail/50 bg-fail/10 px-3 py-2 text-xs text-fail">
+          Mapping rollback #{detail.mapping_version_written} → #{detail.rollback_version}: {detail.rollback_reason}
+        </p>
+      )}
+      {detail?.audit_error && <p className="text-xs text-fail">Audit warning: {detail.audit_error}</p>}
 
       {/* GraphCanvas takes the remaining width; supporting detail moves into
           a fixed 380px sidebar (DASHBOARD.md's only two run-detail layout

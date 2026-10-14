@@ -24,6 +24,7 @@ export default function AttemptTimeline({ detail }) {
                 <span className="text-ink-faint">confidence {h.confidence?.toFixed?.(2) ?? h.confidence}</span>
                 {h.approved_by && <span className="text-ink-faint">via {h.approved_by}</span>}
                 {h.mapping_version != null && <span className="text-ink-faint">mapping #{h.mapping_version}</span>}
+                {h.rollback_version != null && <span className="text-fail">restored #{h.rollback_version}</span>}
               </div>
               <div className="mt-0.5 truncate text-ink-muted">{h.drift_summary}</div>
               {h.components?.length > 0 && <div className="mt-0.5 text-ink-muted">{h.components.map((c) => `${c.specialist} ${c.confidence?.toFixed?.(2) ?? c.confidence}`).join(' · ')}</div>}
@@ -32,6 +33,7 @@ export default function AttemptTimeline({ detail }) {
                   still failing: {h.assertion_failures[0]}
                 </div>
               )}
+              {h.rollback_reason && <div className="mt-0.5 text-fail/80">{h.rollback_reason}</div>}
             </div>
           </li>
         ))}

@@ -7,15 +7,53 @@ through the checkpointer rather than raw SQL for anything touching
 per-attempt history.
 """
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, HTTPException
+from pydantic import BaseModel
 
 from auth import require_token
 from services.analytics import collect_run_summaries
+from services import store
+from services.calibration import aggregate_component_events
+from pipeline.contract import get_registry
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[Depends(require_token)])
 
 DRIFT_CLASSES = ["rename", "type", "nullability", "value", "unknown"]
 SPECIALISTS = ["spec_rename", "spec_type", "spec_nullability", "spec_value"]
+
+
+def _validate_contract_name(name: str) -> None:
+    try:
+        get_registry().get(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ComponentLabel(BaseModel):
+    correct: bool
+    labeled_by: str
+    note: str | None = None
+
+
+@router.get("/components")
+async def component_metrics(pipeline_env: str | None = Query(None),
+                            contract_name: str = "default") -> dict:
+    try:
+        rows = await store.component_event_rows(pipeline_env, contract_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"contract_name": contract_name, **aggregate_component_events(rows)}
+
+
+@router.post("/components/{event_id}/label")
+async def add_component_label(event_id: int, body: ComponentLabel) -> dict:
+    if not body.labeled_by.strip():
+        raise HTTPException(status_code=422, detail="labeled_by is required")
+    try:
+        await store.label_component(event_id, body.correct, body.labeled_by.strip(), body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"event_id": event_id, "labeled": True}
 
 
 def _graph_app(request: Request):
@@ -24,9 +62,10 @@ def _graph_app(request: Request):
 
 @router.get("/summary")
 async def summary(
-    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None)
+    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None), contract_name: str = "default"
 ) -> dict:
-    runs = await collect_run_summaries(graph_app, pipeline_env)
+    _validate_contract_name(contract_name)
+    runs = await collect_run_summaries(graph_app, pipeline_env, contract_name)
     total = len(runs)
     clean = sum(1 for r in runs if r["status"] == "clean")
     drifted = total - clean  # clean runs never needed healing — excluded per spec
@@ -63,9 +102,10 @@ async def summary(
 
 @router.get("/confidence")
 async def confidence(
-    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None)
+    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None), contract_name: str = "default"
 ) -> list[dict]:
-    runs = await collect_run_summaries(graph_app, pipeline_env)
+    _validate_contract_name(contract_name)
+    runs = await collect_run_summaries(graph_app, pipeline_env, contract_name)
     rows = []
     for r in runs:
         for h in r["history"]:
@@ -111,8 +151,9 @@ async def confidence(
 
 @router.get("/drift_distribution")
 async def drift_distribution(
-    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None)
+    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None), contract_name: str = "default"
 ) -> list[dict]:
+    _validate_contract_name(contract_name)
     """Per drift class: how often it showed up, and whether the RUN it
     showed up in ultimately healed or escalated.
 
@@ -128,7 +169,7 @@ async def drift_distribution(
     by the runs table sitting right next to it. A class only counts as
     escalated here if the run it appeared in never healed at all.
     """
-    runs = await collect_run_summaries(graph_app, pipeline_env)
+    runs = await collect_run_summaries(graph_app, pipeline_env, contract_name)
     counts = {c: {"count": 0, "healed": 0, "escalated": 0} for c in DRIFT_CLASSES}
     for r in runs:
         # Only terminal runs -- clean has nothing to attribute, and a run
@@ -165,9 +206,10 @@ async def drift_distribution(
 
 @router.get("/specialist_performance")
 async def specialist_performance(
-    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None)
+    graph_app=Depends(_graph_app), pipeline_env: str | None = Query(None), contract_name: str = "default"
 ) -> list[dict]:
-    runs = await collect_run_summaries(graph_app, pipeline_env)
+    _validate_contract_name(contract_name)
+    runs = await collect_run_summaries(graph_app, pipeline_env, contract_name)
     tally = {s: {"attempts": 0, "passed": 0} for s in SPECIALISTS}
     for r in runs:
         for h in r["history"]:

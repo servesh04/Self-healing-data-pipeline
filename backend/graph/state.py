@@ -43,12 +43,23 @@ class HealAttempt(TypedDict):
     assertion_failures: list[str]
     components: list[dict]
     mapping_version: Optional[int]
+    rollback_version: Optional[int]
+    rollback_reason: Optional[str]
 
 
 class HealState(TypedDict):
     # ── Inputs ──
     run_id: str
     source_path: str
+    contract_name: str
+    contract_version: str
+    contract_snapshot: dict
+    pipeline_env: str
+    mapping_scope: str
+    baseline_failures: list[dict]
+    rollback_version: Optional[int]
+    rollback_reason: Optional[str]
+    audit_error: Optional[str]
 
     # ── Pipeline result ──
     assertions_passed: bool

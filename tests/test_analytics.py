@@ -36,9 +36,11 @@ def _clear_analytics_cache():
     """
     analytics_module._cache.clear()
     analytics_module._pending.clear()
+    analytics_module._generation.clear()
     yield
     analytics_module._cache.clear()
     analytics_module._pending.clear()
+    analytics_module._generation.clear()
 
 
 def _async_return(value):
@@ -158,10 +160,48 @@ class TestCollectRunSummariesFieldDerivation:
 
 
 class TestCollectRunSummariesCachingAndCoalescing:
+    async def test_invalidation_recomputes_only_the_changed_scope(self, monkeypatch, make_graph_app):
+        calls = []
+        async def collect(_graph, env, contract):
+            calls.append((env, contract))
+            return [{"revision": len(calls)}]
+        monkeypatch.setattr(analytics_module, "_collect_run_summaries_uncached", collect)
+        graph = make_graph_app({})
+        first_default = await analytics_module.collect_run_summaries(graph, "p1-cache", "default")
+        first_compact = await analytics_module.collect_run_summaries(graph, "p1-cache", "compact")
+        analytics_module.invalidate_run_summaries("p1-cache", "default")
+        second_default = await analytics_module.collect_run_summaries(graph, "p1-cache", "default")
+        second_compact = await analytics_module.collect_run_summaries(graph, "p1-cache", "compact")
+        assert first_default != second_default
+        assert first_compact == second_compact
+        assert calls == [("p1-cache", "default"), ("p1-cache", "compact"), ("p1-cache", "default")]
+
+    async def test_inflight_stale_aggregation_cannot_repopulate_cache(self, monkeypatch, make_graph_app):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        calls = {"count": 0}
+        async def collect(_graph, env, contract):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                entered.set()
+                await release.wait()
+                return [{"revision": "stale"}]
+            return [{"revision": "fresh"}]
+        monkeypatch.setattr(analytics_module, "_collect_run_summaries_uncached", collect)
+        graph = make_graph_app({})
+        old = asyncio.create_task(analytics_module.collect_run_summaries(graph, "p1-race", "default"))
+        await entered.wait()
+        analytics_module.invalidate_run_summaries("p1-race", "default")
+        assert await analytics_module.collect_run_summaries(graph, "p1-race", "default") == [{"revision": "fresh"}]
+        release.set()
+        assert await old == [{"revision": "stale"}]
+        assert await analytics_module.collect_run_summaries(graph, "p1-race", "default") == [{"revision": "fresh"}]
+        assert calls["count"] == 2
+
     async def test_a_second_call_within_the_ttl_does_not_recompute(self, monkeypatch, make_graph_app):
         call_count = {"n": 0}
 
-        async def counting_list_run_records(limit=500, pipeline_env=None):
+        async def counting_list_run_records(limit=500, pipeline_env=None, contract_name="default"):
             call_count["n"] += 1
             return []
 
@@ -188,7 +228,7 @@ class TestCollectRunSummariesCachingAndCoalescing:
         call_count = {"n": 0}
         release = asyncio.Event()
 
-        async def gated_list_run_records(limit=500, pipeline_env=None):
+        async def gated_list_run_records(limit=500, pipeline_env=None, contract_name="default"):
             call_count["n"] += 1
             await release.wait()
             return []
@@ -213,7 +253,7 @@ class TestCollectRunSummariesCachingAndCoalescing:
         prevent the app from starting or the seed script from finishing.
         """
 
-        async def boom(limit=500, pipeline_env=None):
+        async def boom(limit=500, pipeline_env=None, contract_name="default"):
             raise RuntimeError("simulated Postgres outage")
 
         monkeypatch.setattr(analytics_module.store, "list_run_records", boom)

@@ -42,6 +42,7 @@ from datetime import datetime
 from pathlib import Path
 
 from db import get_pool
+from config import get_settings
 from services import store
 
 log = logging.getLogger(__name__)
@@ -70,18 +71,27 @@ log = logging.getLogger(__name__)
 # aggregate "system at rest" view is a fair trade for that; nothing here is
 # a live single-run status (that's RunDetail's 2s poll, unaffected).
 _CACHE_TTL_SECONDS = 60.0
-_cache: dict[str | None, tuple[float, list[dict]]] = {}
-_pending: dict[str | None, asyncio.Task] = {}
+_cache: dict[tuple[str | None, str | None], tuple[float, list[dict]]] = {}
+_pending: dict[tuple[str | None, str | None], asyncio.Task] = {}
+_generation: dict[tuple[str | None, str | None], int] = {}
 
 
-async def warm_cache(graph_app, pipeline_env: str | None = None) -> None:
+def invalidate_run_summaries(pipeline_env: str | None, contract_name: str = "default") -> None:
+    """Drop one scope's summary, including an aggregation already in flight."""
+    key = (pipeline_env if pipeline_env is not None else get_settings().pipeline_env, contract_name)
+    _generation[key] = _generation.get(key, 0) + 1
+    _cache.pop(key, None)
+    _pending.pop(key, None)
+
+
+async def warm_cache(graph_app, pipeline_env: str | None = None, contract_name: str | None = "default") -> None:
     """Pay the ~8-9s cost once, proactively, instead of making whoever
     opens the dashboard first pay it. Called from main.py's lifespan on
     startup and from seed_dashboard.py as its last step. Best-effort: a
     failure here must not prevent the app from starting.
     """
     try:
-        await collect_run_summaries(graph_app, pipeline_env)
+        await collect_run_summaries(graph_app, pipeline_env, contract_name)
     except Exception:
         log.exception("analytics: cache warm-up failed (will populate on first real request)")
 
@@ -107,7 +117,8 @@ async def _completed_at(thread_id: str) -> datetime | None:
         return None
 
 
-async def collect_run_summaries(graph_app, pipeline_env: str | None = None) -> list[dict]:
+async def collect_run_summaries(graph_app, pipeline_env: str | None = None,
+                                contract_name: str | None = "default") -> list[dict]:
     """One dict per run in `run_records`, combining the SQL registry with
     the checkpointer's deserialized final state. Each dict carries a
     `history` key (the raw list of HealAttempt dicts) for callers that need
@@ -116,21 +127,25 @@ async def collect_run_summaries(graph_app, pipeline_env: str | None = None) -> l
     before returning. Cached briefly per pipeline_env — see module docstring.
     """
     now = time.monotonic()
-    cached = _cache.get(pipeline_env)
+    effective_env = pipeline_env if pipeline_env is not None else get_settings().pipeline_env
+    key = (effective_env, contract_name)
+    generation = _generation.get(key, 0)
+    cached = _cache.get(key)
     if cached and now - cached[0] < _CACHE_TTL_SECONDS:
         return cached[1]
 
-    task = _pending.get(pipeline_env)
+    task = _pending.get(key)
     if task is None or task.done():
-        task = asyncio.ensure_future(_collect_run_summaries_uncached(graph_app, pipeline_env))
-        _pending[pipeline_env] = task
+        task = asyncio.ensure_future(_collect_run_summaries_uncached(graph_app, effective_env, contract_name))
+        _pending[key] = task
     try:
         summaries = await task
     finally:
-        if _pending.get(pipeline_env) is task:
-            del _pending[pipeline_env]
+        if _pending.get(key) is task:
+            del _pending[key]
 
-    _cache[pipeline_env] = (time.monotonic(), summaries)
+    if _generation.get(key, 0) == generation:
+        _cache[key] = (time.monotonic(), summaries)
     return summaries
 
 
@@ -170,6 +185,8 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
 
     return {
         "run_id": run_id,
+        "contract_name": record.get("contract_name", "default"),
+        "contract_version": record.get("contract_version"),
         "source_path": record["source_path"],
         "dataset": Path(record["source_path"]).name,
         "status": status,
@@ -189,7 +206,8 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
     }
 
 
-async def _collect_run_summaries_uncached(graph_app, pipeline_env: str | None = None) -> list[dict]:
-    records = await store.list_run_records(limit=500, pipeline_env=pipeline_env)
+async def _collect_run_summaries_uncached(graph_app, pipeline_env: str | None = None,
+                                          contract_name: str | None = "default") -> list[dict]:
+    records = await store.list_run_records(limit=500, pipeline_env=pipeline_env, contract_name=contract_name)
     results = await asyncio.gather(*(_summarize_one(r, graph_app) for r in records))
     return [r for r in results if r is not None]

@@ -1,0 +1,15 @@
+# A second named scope with a deliberately different set of columns.
+columns:
+  customer_id:
+    dtype: int64
+    nullable: false
+    unique: true
+  segment:
+    dtype: str
+    nullable: false
+    allowed: [Retail, Wholesale]
+  spend:
+    dtype: float64
+    nullable: false
+    min: 0
+row_count_min: 3

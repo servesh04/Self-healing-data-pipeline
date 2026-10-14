@@ -13,7 +13,7 @@ between heal attempts.
 
 import pandas as pd
 
-from pipeline.contract import load_contract
+from pipeline.contract import contract_for_state
 
 MAX_DISTINCT = 32
 
@@ -29,7 +29,7 @@ def profile_source(state: dict) -> dict:
 
     schema: dict[str, str] = {}
     profile: dict[str, dict] = {}
-    categorical = load_contract().allowed_values
+    categorical = contract_for_state(state).allowed_values
     for col in df.columns:
         dtype = str(df[col].dtype)
         schema[col] = dtype

@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from graph.nodes.multi_specialist import merge_fragments
-from pipeline.contract import load_contract
+from pipeline.contract import Contract, contract_for_state
 from pipeline.mapping import MappingPatch
 from pipeline.runner import run_pipeline
 from services import store
@@ -12,8 +12,8 @@ from services import store
 log = logging.getLogger(__name__)
 
 
-def merge_mapping(current: MappingPatch, patch: dict) -> MappingPatch:
-    candidate = merge_fragments([patch])
+def merge_mapping(current: MappingPatch, patch: dict, contract: Contract | None = None) -> MappingPatch:
+    candidate = merge_fragments([patch], contract=contract)
     for section in ("renames", "casts", "null_policy"):
         existing = getattr(current, section)
         overlap = set(existing) & set(candidate.get(section, {}))
@@ -27,13 +27,13 @@ def merge_mapping(current: MappingPatch, patch: dict) -> MappingPatch:
             if source in maps.get(col, {}):
                 raise ValueError(f"patch rewrites existing value mapping: {col}.{source}")
         maps.setdefault(col, {}).update(replacements)
-    return MappingPatch(
+    return MappingPatch.model_validate(dict(
         renames={**current.renames, **candidate.get("renames", {})},
         casts={**current.casts, **candidate.get("casts", {})},
         null_policy={**current.null_policy, **candidate.get("null_policy", {})},
         drops=list(dict.fromkeys([*current.drops, *candidate.get("drops", [])])),
         value_maps=maps,
-    )
+    ), context={"contract": contract} if contract else None)
 
 
 async def apply_patch(state: dict) -> dict:
@@ -41,14 +41,15 @@ async def apply_patch(state: dict) -> dict:
     if not patch or not any(patch.values()):
         return {"patch_error": "empty patch", "applied_patch": None}
     try:
-        current, version = await store.get_current_mapping_version()
+        contract = contract_for_state(state)
+        current, version = await store.get_current_mapping_version(state.get("pipeline_env"), contract.name, contract)
         if version != state.get("mapping_version_read"):
             raise ValueError("mapping changed since this run started")
         source_hash = hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest()
         if source_hash != state.get("source_sha256"):
             raise ValueError("source changed since this run started")
-        merged = merge_mapping(current, patch)
-        preflight = run_pipeline(state["source_path"], merged, load_contract())
+        merged = merge_mapping(current, patch, contract)
+        preflight = run_pipeline(state["source_path"], merged, contract)
         if hashlib.sha256(Path(state["source_path"]).read_bytes()).hexdigest() != source_hash:
             raise ValueError("source changed during preflight")
         if not preflight.passed:
@@ -57,6 +58,12 @@ async def apply_patch(state: dict) -> dict:
             merged, expected_id=version,
             updated_by=f"agent:attempt-{state['heal_attempts'] + 1}",
             run_id=state.get("run_id"),
+            pipeline_env=state.get("pipeline_env"), contract_name=contract.name,
+            components=state.get("components") or [], contract_version=contract.version,
+            dataset_family=Path(state["source_path"]).stem.split("_")[0],
+            decision="human_approved" if state.get("human_decision") == "approve" else "auto_applied",
+            attempt_no=state["heal_attempts"] + 1,
+            contract=contract,
         )
     except Exception as exc:
         log.warning("apply_patch: batch rejected: %s", exc)

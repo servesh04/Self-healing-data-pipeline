@@ -1,5 +1,6 @@
 import { postGlobalChat } from '../../api/client'
 import ChatPanel from '../RunChat/ChatPanel'
+import { useRunStore } from '../../store/useRunStore'
 
 // Per the feature spec's frontend requirements: panel on Overview, below
 // Specialist Performance, with these 3 chips specifically (cross-run
@@ -11,11 +12,12 @@ const SUGGESTED = [
 ]
 
 export default function GlobalChat() {
+  const contractName = useRunStore((s) => s.contractName)
   return (
     <ChatPanel
       suggested={SUGGESTED}
       placeholder="Ask about the whole pipeline…"
-      onSend={(messages) => postGlobalChat(messages)}
+      onSend={(messages) => postGlobalChat(messages, contractName)}
     />
   )
 }

@@ -20,6 +20,7 @@ from auth import require_token
 from prompts.prompts import CHAT_SYSTEM_GLOBAL, CHAT_SYSTEM_PER_RUN, CHAT_USER_TEMPLATE
 from services.chat_context import build_global_context, build_run_context, estimate_tokens
 from services.llm import LLMError, call_json
+from pipeline.contract import get_registry
 
 log = logging.getLogger(__name__)
 
@@ -126,9 +127,15 @@ async def chat_global(
     graph_app=Depends(_graph_app),
     status: str | None = Query(None, description="filter run records by status"),
     dataset: str | None = Query(None, description="filter run records by dataset filename"),
+    contract_name: str = Query("default"),
 ) -> dict:
     if not body.messages or body.messages[-1].role != "user":
         raise HTTPException(status_code=400, detail="last message must be from the user")
 
-    context = await build_global_context(graph_app, status=status, dataset=dataset)
+    try:
+        get_registry().get(contract_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    context = await build_global_context(graph_app, status=status, dataset=dataset, contract_name=contract_name)
     return await _ask(CHAT_SYSTEM_GLOBAL, context, body.messages)

@@ -47,19 +47,20 @@ export async function probeAuthRejection() {
 }
 
 // ── Phase 5: runs + config ───────────────────────────────────────────────
-export const listRuns = ({ limit, status, dataset } = {}) => {
+export const listRuns = ({ limit, status, dataset, contractName = 'default' } = {}) => {
   const params = new URLSearchParams()
   if (limit) params.set('limit', limit)
   if (status) params.set('status', status)
   if (dataset) params.set('dataset', dataset)
+  params.set('contract_name', contractName)
   const qs = params.toString()
   return request(`/api/runs${qs ? `?${qs}` : ''}`)
 }
-export const triggerRun = (sourcePath) =>
+export const triggerRun = (sourcePath, contractName = 'default') =>
   request('/api/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source_path: sourcePath }),
+    body: JSON.stringify({ source_path: sourcePath, contract_name: contractName }),
   })
 export const getRun = (runId) => request(`/api/runs/${runId}`)
 export const approveRun = (runId, note) =>
@@ -74,14 +75,16 @@ export const rejectRun = (runId, note) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ note: note ?? null }),
   })
-export const getCurrentMapping = () => request('/api/config/mapping')
-export const getMappingHistory = (limit = 50) => request(`/api/config/mapping/history?limit=${limit}`)
+export const getContracts = () => request('/api/config/contracts')
+export const getCurrentMapping = (contractName = 'default') => request(`/api/config/mapping?contract_name=${encodeURIComponent(contractName)}`)
+export const getMappingHistory = (limit = 50, contractName = 'default') => request(`/api/config/mapping/history?limit=${limit}&contract_name=${encodeURIComponent(contractName)}`)
 
 // ── DASHBOARD.md: read-only analytics ───────────────────────────────────
-export const getAnalyticsSummary = () => request('/api/analytics/summary')
-export const getAnalyticsConfidence = () => request('/api/analytics/confidence')
-export const getAnalyticsDriftDistribution = () => request('/api/analytics/drift_distribution')
-export const getAnalyticsSpecialistPerformance = () => request('/api/analytics/specialist_performance')
+export const getAnalyticsSummary = (contractName = 'default') => request(`/api/analytics/summary?contract_name=${encodeURIComponent(contractName)}`)
+export const getAnalyticsConfidence = (contractName = 'default') => request(`/api/analytics/confidence?contract_name=${encodeURIComponent(contractName)}`)
+export const getAnalyticsDriftDistribution = (contractName = 'default') => request(`/api/analytics/drift_distribution?contract_name=${encodeURIComponent(contractName)}`)
+export const getAnalyticsSpecialistPerformance = (contractName = 'default') => request(`/api/analytics/specialist_performance?contract_name=${encodeURIComponent(contractName)}`)
+export const getComponentMetrics = (contractName = 'default') => request(`/api/analytics/components?contract_name=${encodeURIComponent(contractName)}`)
 
 // ── Read-only chat over run data ─────────────────────────────────────────
 // messages: [{role: 'user'|'assistant', content: string}]. Read-only —
@@ -101,16 +104,16 @@ export const postRunChat = (runId, messages) =>
 // can genuinely exceed it under that transient pressure, surfacing as a
 // 503. One quiet retry here is cheap insurance against that specific,
 // observed failure mode — not a generic "retry everything" policy.
-export const postGlobalChat = async (messages) => {
+export const postGlobalChat = async (messages, contractName = 'default') => {
   try {
-    return await request('/api/chat', {
+    return await request(`/api/chat?contract_name=${encodeURIComponent(contractName)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scope: 'global', messages }),
     })
   } catch (err) {
     if (err.status !== 503) throw err
-    return request('/api/chat', {
+    return request(`/api/chat?contract_name=${encodeURIComponent(contractName)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scope: 'global', messages }),

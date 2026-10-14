@@ -21,15 +21,21 @@ not top-level `pandera` (ARCHITECTURE.md predates this).
 """
 
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
+import hashlib
+import json
+import re
 
 import pandas as pd
 import pandera.pandas as pa
 import yaml
 from pandera import Check, Column
 
-CONTRACT_PATH = Path(__file__).resolve().parents[2] / "config" / "contract.yaml"
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+CONTRACT_PATH = CONFIG_DIR / "contracts" / "default.yaml"
+LEGACY_CONTRACT_PATH = CONFIG_DIR / "contract.yaml"
+CONTRACTS_DIR = CONFIG_DIR / "contracts"
+_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 # Contract dtype string -> the type pandera/pandas actually wants to compare
 # against. "object" is kept as an alias to `str` for anyone hand-editing the
@@ -74,6 +80,98 @@ class Contract:
     row_count_min: int
     expected_dtypes: dict[str, str]  # column -> declared dtype string, for diff_contract (Phase 3)
     allowed_values: dict[str, list[str]] = field(default_factory=dict)
+    name: str = "default"
+    version: str = ""
+    spec: dict = field(default_factory=dict)
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def _unique_mapping(loader, node):
+    result = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node)
+        if key in result:
+            raise ValueError(f"duplicate contract key: {key}")
+        result[key] = loader.construct_object(value_node)
+    return result
+
+
+_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping)
+
+
+def _validated_spec(raw: dict) -> dict:
+    if not isinstance(raw, dict) or set(raw) - {"columns", "row_count_min"}:
+        raise ValueError("contract has invalid top-level keys")
+    columns = raw.get("columns")
+    if not isinstance(columns, dict) or not columns:
+        raise ValueError("contract requires nonempty columns")
+    if not isinstance(raw.get("row_count_min", 0), int) or raw.get("row_count_min", 0) < 0:
+        raise ValueError("row_count_min must be a nonnegative integer")
+    for name, spec in columns.items():
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise ValueError(f"invalid contract column: {name}")
+        if not isinstance(spec, dict) or set(spec) - {"dtype", "nullable", "unique", "allowed", "min"}:
+            raise ValueError(f"invalid contract column spec: {name}")
+        if spec.get("dtype") not in _DTYPE_MAP:
+            raise ValueError(f"unknown dtype for {name}")
+        if any(key in spec and not isinstance(spec[key], bool) for key in ("nullable", "unique")):
+            raise ValueError(f"nullable/unique must be boolean: {name}")
+        if "allowed" in spec:
+            allowed = spec["allowed"]
+            if spec["dtype"] not in ("str", "object") or not isinstance(allowed, list) or not allowed or not all(isinstance(v, str) for v in allowed) or len(set(allowed)) != len(allowed):
+                raise ValueError(f"invalid allowed values: {name}")
+        if "min" in spec and (not isinstance(spec["min"], (int, float)) or isinstance(spec["min"], bool)):
+            raise ValueError(f"invalid minimum: {name}")
+    return raw
+
+
+def contract_version(spec: dict) -> str:
+    return hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def contract_from_snapshot(spec: dict, name: str = "default", version: str | None = None) -> Contract:
+    spec = _validated_spec(spec)
+    actual_version = contract_version(spec)
+    if version is not None and version != actual_version:
+        raise ValueError("pinned contract snapshot hash mismatch")
+    columns = {column: _build_column(column_spec) for column, column_spec in spec["columns"].items()}
+    return Contract(
+        schema=pa.DataFrameSchema(columns, strict=True, coerce=False),
+        row_count_min=int(spec.get("row_count_min", 0)),
+        expected_dtypes={column: column_spec["dtype"] for column, column_spec in spec["columns"].items()},
+        allowed_values={column: list(column_spec["allowed"]) for column, column_spec in spec["columns"].items() if "allowed" in column_spec},
+        name=name, version=actual_version, spec=spec,
+    )
+
+
+class ContractRegistry:
+    def __init__(self, directory: Path = CONTRACTS_DIR):
+        self.directory = Path(directory)
+        self._paths: dict[str, Path] = {}
+        for path in sorted(self.directory.glob("*.yaml")):
+            name = path.stem.lower()
+            if not _NAME.fullmatch(name) or name in self._paths:
+                raise ValueError(f"duplicate or invalid contract name: {path.stem}")
+            self._paths[name] = path
+        if "default" not in self._paths:
+            raise ValueError("default contract is missing")
+        for name, path in self._paths.items():
+            load_contract(path, name)
+
+    def names(self) -> list[str]:
+        return sorted(self._paths)
+
+    def get(self, name: str) -> Contract:
+        if name not in self._paths:
+            raise ValueError(f"unknown contract: {name}")
+        return load_contract(self._paths[name], name)
+
+
+def get_registry() -> ContractRegistry:
+    return ContractRegistry()
 
 
 def _build_column(spec: dict) -> Column:
@@ -91,17 +189,20 @@ def _build_column(spec: dict) -> Column:
     )
 
 
-@lru_cache
-def load_contract(path: Path = CONTRACT_PATH) -> Contract:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    columns = {name: _build_column(spec) for name, spec in raw["columns"].items()}
-    schema = pa.DataFrameSchema(columns, strict=True, coerce=False)
-    return Contract(
-        schema=schema,
-        row_count_min=int(raw.get("row_count_min", 0)),
-        expected_dtypes={name: spec["dtype"] for name, spec in raw["columns"].items()},
-        allowed_values={name: list(spec["allowed"]) for name, spec in raw["columns"].items() if "allowed" in spec},
-    )
+def load_contract(path: Path = CONTRACT_PATH, name: str = "default") -> Contract:
+    path = Path(path)
+    if path == LEGACY_CONTRACT_PATH:
+        path = CONTRACT_PATH
+    raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
+    return contract_from_snapshot(raw, name)
+
+
+def contract_for_state(state: dict) -> Contract:
+    """Use the checkpointed spec on resume, even if registry files changed."""
+    spec = state.get("contract_snapshot")
+    if spec is not None:
+        return contract_from_snapshot(spec, state.get("contract_name", "default"), state.get("contract_version"))
+    return get_registry().get(state.get("contract_name", "default"))
 
 
 def _group_failures(failure_cases: pd.DataFrame) -> list[FailureCase]:

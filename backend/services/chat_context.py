@@ -101,6 +101,8 @@ async def build_run_context(run_id: str, graph_app) -> dict | None:
 
     context = {
         "run_id": run_id,
+        "contract_name": values.get("contract_name", "default"),
+        "contract_version": values.get("contract_version"),
         "dataset": Path(values.get("source_path") or "").name,
         "status": status,
         "drift_class": values.get("drift_class"),
@@ -186,6 +188,7 @@ async def build_global_context(
     pipeline_env: str | None = None,
     status: str | None = None,
     dataset: str | None = None,
+    contract_name: str = "default",
 ) -> dict:
     """Aggregates ALWAYS included in full — they're the anti-hallucination
     strategy for every counting/rate question. Per-run detail (the `runs`
@@ -199,12 +202,12 @@ async def build_global_context(
     aggregates complete -- not retrieval. Not built now; this repo's seeded
     dataset is 20 runs.
     """
-    summary = await analytics_summary(graph_app=graph_app, pipeline_env=pipeline_env)
-    drift_dist = await analytics_drift_distribution(graph_app=graph_app, pipeline_env=pipeline_env)
-    spec_perf = await analytics_specialist_performance(graph_app=graph_app, pipeline_env=pipeline_env)
-    conf_rows = await analytics_confidence(graph_app=graph_app, pipeline_env=pipeline_env)
+    summary = await analytics_summary(graph_app=graph_app, pipeline_env=pipeline_env, contract_name=contract_name)
+    drift_dist = await analytics_drift_distribution(graph_app=graph_app, pipeline_env=pipeline_env, contract_name=contract_name)
+    spec_perf = await analytics_specialist_performance(graph_app=graph_app, pipeline_env=pipeline_env, contract_name=contract_name)
+    conf_rows = await analytics_confidence(graph_app=graph_app, pipeline_env=pipeline_env, contract_name=contract_name)
 
-    runs = await collect_run_summaries(graph_app, pipeline_env)
+    runs = await collect_run_summaries(graph_app, pipeline_env, contract_name)
     if status:
         runs = [r for r in runs if r["status"] == status]
     if dataset:
@@ -212,6 +215,7 @@ async def build_global_context(
     runs.sort(key=lambda r: r["created_at"] or "", reverse=True)
 
     context = {
+        "contract_name": contract_name,
         "summary": summary,
         "drift_distribution": drift_dist,
         "specialist_performance": spec_perf,

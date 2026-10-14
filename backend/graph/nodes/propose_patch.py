@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from graph.schemas import ProposePatchOutput, normalize_llm_json
 from prompts.prompts import PROPOSE_PATCH_SYSTEM, PROPOSE_PATCH_USER_TEMPLATE
 from services.llm import LLMError, call_json
+from services import store
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +74,14 @@ async def propose_patch(state: dict) -> dict:
     except LLMError as exc:
         log.warning("propose_patch: rationale generation failed, using a template rationale: %s", exc)
 
+    event_state = {**state, "components": components}
+    if state.get("run_id"):
+        try:
+            for index in range(len(components)):
+                await store.record_component_event(event_state, index, "proposal")
+        except Exception as exc:
+            log.exception("component proposal audit failed")
+            return {"proposed_patch": None, "proposal_error": f"proposal audit failed: {exc}"}
     return {
         "proposed_patch": patch,
         "patch_rationale": rationale,

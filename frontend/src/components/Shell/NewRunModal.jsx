@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRunStore } from '../../store/useRunStore'
 import { DATASETS } from '../../lib/datasets'
 
@@ -9,6 +9,9 @@ export default function NewRunModal() {
   const triggering = useRunStore((s) => s.triggering)
   const triggerError = useRunStore((s) => s.triggerError)
   const [dataset, setDataset] = useState(DATASETS[3].file)
+  const contractName = useRunStore((s) => s.contractName)
+  const choices = contractName === 'compact' ? [{ file: 'compact_clean.csv', label: 'compact — clean control' }] : DATASETS
+  useEffect(() => { setDataset(choices[0].file) }, [contractName])
 
   if (!open) return null
 
@@ -24,12 +27,13 @@ export default function NewRunModal() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-ink-muted">
           Trigger a run
         </h2>
+        <p className="mb-2 text-[11px] text-ink-faint">Contract: <span className="text-signal">{contractName}</span></p>
         <select
           value={dataset}
           onChange={(e) => setDataset(e.target.value)}
           className="w-full rounded border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink focus:border-ink-faint focus:outline-none"
         >
-          {DATASETS.map((d) => (
+          {choices.map((d) => (
             <option key={d.file} value={d.file}>
               {d.label}
             </option>
@@ -44,7 +48,7 @@ export default function NewRunModal() {
             Cancel
           </button>
           <button
-            onClick={() => trigger(dataset)}
+            onClick={() => trigger(choices.some((d) => d.file === dataset) ? dataset : choices[0].file)}
             disabled={triggering}
             className="rounded border border-signal bg-signal/15 px-3 py-1.5 text-xs font-medium text-signal hover:bg-signal/25 disabled:opacity-50"
           >

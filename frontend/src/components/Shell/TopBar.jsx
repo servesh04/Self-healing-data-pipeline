@@ -5,12 +5,17 @@ import { useRunStore } from '../../store/useRunStore'
 export default function TopBar() {
   const [appEnv, setAppEnv] = useState(null)
   const openNewRun = useRunStore((s) => s.openNewRun)
+  const contracts = useRunStore((s) => s.contracts)
+  const contractName = useRunStore((s) => s.contractName)
+  const fetchContracts = useRunStore((s) => s.fetchContracts)
+  const setContractName = useRunStore((s) => s.setContractName)
 
   useEffect(() => {
     getPing()
       .then((r) => setAppEnv(r.env))
       .catch(() => {})
-  }, [])
+    fetchContracts()
+  }, [fetchContracts])
 
   return (
     <header className="border-b border-line bg-surface">
@@ -26,6 +31,13 @@ export default function TopBar() {
             env: {appEnv}
           </span>
         )}
+        <label className="ml-3 text-[11px] text-ink-muted">Contract{' '}
+          <select aria-label="Contract" value={contractName} onChange={(e) => setContractName(e.target.value)}
+            className="rounded border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink">
+            {(contracts.length ? contracts : [{ name: 'default' }]).map((c) =>
+              <option key={c.name} value={c.name}>{c.name}</option>)}
+          </select>
+        </label>
         <button
           onClick={openNewRun}
           className="ml-auto rounded border border-line-strong bg-surface-raised px-3 py-1.5 text-xs font-medium text-ink hover:border-signal-dim"

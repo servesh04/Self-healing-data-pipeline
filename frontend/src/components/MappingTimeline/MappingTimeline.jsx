@@ -31,7 +31,7 @@ export default function MappingTimeline({ history, showSeedResets }) {
       {visible.map(({ entry, lines }) => (
         <li key={entry.id} className="rounded-lg border border-line bg-surface p-3">
           <div className="mb-1.5 flex items-center justify-between text-[11px] text-ink-faint">
-            <span>{entry.updated_by}</span>
+            <span>#{entry.id} · {entry.event_type || entry.updated_by} · parent #{entry.parent_id ?? '—'}</span>
             <span>{new Date(entry.created_at).toLocaleString()}</span>
           </div>
           {entry.run_id && (
@@ -41,6 +41,9 @@ export default function MappingTimeline({ history, showSeedResets }) {
             >
               run {entry.run_id.slice(0, 8)}…
             </button>
+          )}
+          {entry.event_type === 'rollback' && (
+            <p className="mb-1.5 text-[11px] text-fail">Restored #{entry.restores_version_id}: {entry.rollback_reason}</p>
           )}
           {lines.length === 0 ? (
             <p className="text-xs text-ink-faint">(no-op)</p>

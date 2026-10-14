@@ -38,8 +38,11 @@ export default function MappingAudit({ detail }) {
             <div className="min-w-0">
               <div className="truncate text-ink">{summarize(entry.mapping)}</div>
               <div className="text-[10px] text-ink-faint">
-                {entry.updated_by} · {new Date(entry.created_at).toLocaleTimeString()}
+                version #{entry.id} · {entry.event_type || entry.updated_by} · parent #{entry.parent_id ?? '—'} · {new Date(entry.created_at).toLocaleTimeString()}
               </div>
+              {entry.event_type === 'rollback' && (
+                <div className="text-[10px] text-fail">Restored #{entry.restores_version_id}: {entry.rollback_reason}</div>
+              )}
             </div>
           </li>
         ))}

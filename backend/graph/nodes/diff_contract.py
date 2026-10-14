@@ -38,7 +38,7 @@ robust than asking every future prompt revision to reason around it.
 """
 
 from graph.state import DriftItem
-from pipeline.contract import load_contract
+from pipeline.contract import contract_for_state
 
 _CHECK_KIND_MAP = {
     "column_in_dataframe": "missing_column",
@@ -70,7 +70,7 @@ def _is_dtype_cascade_artifact(detail: dict) -> bool:
 
 
 def diff_contract(state: dict) -> dict:
-    contract = load_contract()
+    contract = contract_for_state(state)
     raw_details = state.get("assertion_failure_details") or []
     details = [d for d in raw_details if not _is_dtype_cascade_artifact(d)]
 

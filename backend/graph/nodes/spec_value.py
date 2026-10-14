@@ -5,7 +5,7 @@ import logging
 from pydantic import ValidationError
 
 from graph.schemas import ValueSpecialistOutput, normalize_llm_json
-from pipeline.contract import load_contract
+from pipeline.contract import contract_for_state
 from prompts.prompts import SPEC_VALUE_SYSTEM, SPEC_VALUE_USER_TEMPLATE
 from services.llm import LLMError, call_json
 from services import store
@@ -24,12 +24,12 @@ async def spec_value(state: dict) -> dict:
     findings = state.get("drift_items") or []
     profile = state.get("source_profile") or {}
     try:
-        current = await store.get_current_mapping()
+        current = await store.get_current_mapping(state.get("pipeline_env"), state.get("contract_name", "default"), contract_for_state(state))
         aliases = {**current.renames, **(state.get("pending_renames") or {})}
         profile = {**profile, **{new: profile[old] for old, new in aliases.items() if old in profile}}
     except Exception:
         return {"specialist_output": {}}
-    allowed = load_contract().allowed_values
+    allowed = contract_for_state(state).allowed_values
     if not findings or any(f.get("kind") != "enum_value" or f.get("column") not in allowed
                            or profile.get(f["column"], {}).get("truncated") for f in findings):
         return {"specialist_output": {}}

@@ -51,6 +51,20 @@ export default function Overview() {
 
       <SpecialistPerformance data={analytics.specialistPerformance} />
 
+      {analytics.componentMetrics && (
+        <section className="rounded-lg border border-line bg-surface p-3 text-xs">
+          <h2 className="mb-2 font-semibold uppercase tracking-wider text-ink-muted">Component evidence</h2>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div><span className="block text-ink-faint">Proposals</span><strong>{analytics.componentMetrics.proposals}</strong></div>
+            <div><span className="block text-ink-faint">Human approval</span><strong>{analytics.componentMetrics.human_approval_rate == null ? 'no reviews' : `${Math.round(analytics.componentMetrics.human_approval_rate * 100)}%`}</strong><span className="ml-1 text-ink-faint">of {analytics.componentMetrics.human_approval_denominator} reviews</span></div>
+            <div><span className="block text-ink-faint">Labeled correctness</span><strong>{analytics.componentMetrics.labeled_correctness_rate == null ? 'unlabeled' : `${Math.round(analytics.componentMetrics.labeled_correctness_rate * 100)}%`}</strong><span className="ml-1 text-ink-faint">of {analytics.componentMetrics.labeled_denominator} labels</span>
+              {analytics.componentMetrics.labeled_correctness_ci95 && <span className="block text-[10px] text-ink-faint">95% interval {Math.round(analytics.componentMetrics.labeled_correctness_ci95[0] * 100)}–{Math.round(analytics.componentMetrics.labeled_correctness_ci95[1] * 100)}%</span>}
+            </div>
+          </div>
+          <p className="mt-2 text-[11px] text-ink-faint">Validation passed: {analytics.componentMetrics.validation_passed} of {analytics.componentMetrics.validation_denominator} outcomes. Approval and validation are separate from correctness.</p>
+        </section>
+      )}
+
       {/* Read-only chat over all-run data — new feature, no relation to the
           healing graph. Placed below Specialist Performance per the feature
           spec's frontend requirements. Open by default, same as per-run's

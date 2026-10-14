@@ -19,22 +19,13 @@ Runs the P0 fixture matrix twice:
   script doesn't assume that, it observes it.
 
 Mapping isolation, one namespace per dataset:
-  Graph nodes (run_pipeline/apply_patch/rerun_validate, in
-  backend/graph/nodes/) call `services.store.get_current_mapping()` /
-  `save_mapping()` with no explicit pipeline_env argument — they always
-  resolve `config.get_settings().pipeline_env`, i.e. whatever the *process*
-  is currently configured with. That's fine for the real app (one process,
-  one namespace, "default") but wrong for eval: 6 datasets sharing one
-  namespace would mean day2's rename patch is still sitting in the mapping
-  when day3 starts, contaminating every dataset after the first with
-  someone else's fix. Unlike scripts/check_pipeline.py (which sidesteps
-  this by calling store functions directly with an explicit pipeline_env),
-  the graph nodes give no such hook — so this script gets equivalent
-  isolation by setting PIPELINE_ENV and clearing config.get_settings's
-  cache before each dataset's full-graph run. A pristine namespace's first
-  get_current_mapping() call seeds straight from config/mapping.yaml
-  (services/store.py), so every dataset starts from the same clean slate
-  the baseline run used.
+  Each fixture checkpoints a unique `pipeline_env` plus the default contract
+  snapshot/hash. The graph passes that scope explicitly to mapping reads,
+  guarded writes, and outcome records. `run_records` and `component_events`
+  are initialized before the graph; each fixture registers its run so its
+  audit writes are real. The script still sets PIPELINE_ENV for compatibility
+  with older helpers, but the checkpointed scope is authoritative. A fresh
+  namespace seeds an empty mapping, keeping fixtures independent.
 
 Checkpointer: InMemorySaver, not the Postgres one. Every interrupt/resume
 here happens inside this single script run, never across a process
@@ -73,7 +64,7 @@ import config as app_config  # noqa: E402
 import db  # noqa: E402
 from graph.build import build_graph  # noqa: E402
 from graph.state import RECURSION_LIMIT  # noqa: E402
-from pipeline.contract import load_contract  # noqa: E402
+from pipeline.contract import get_registry, load_contract  # noqa: E402
 from pipeline.mapping import MappingPatch  # noqa: E402
 from pipeline.runner import run_pipeline as run_the_pipeline  # noqa: E402
 from services import store  # noqa: E402
@@ -120,10 +111,20 @@ def _line() -> None:
     print("-" * 78)
 
 
-def _blank_state(run_id: str, source_path: str) -> dict:
+def _blank_state(run_id: str, source_path: str, pipeline_env: str) -> dict:
+    contract = get_registry().get("default")
     return {
         "run_id": run_id,
         "source_path": source_path,
+        "pipeline_env": pipeline_env,
+        "contract_name": contract.name,
+        "contract_version": contract.version,
+        "contract_snapshot": contract.spec,
+        "mapping_scope": f"mapping:{pipeline_env}:{contract.name}",
+        "baseline_failures": [],
+        "rollback_version": None,
+        "rollback_reason": None,
+        "audit_error": None,
         "assertions_passed": False,
         "assertion_failures": [],
         "rows_in": 0,
@@ -182,7 +183,11 @@ async def run_full_graph(filename: str, label: str) -> dict:
     run_id = f"{env}-{uuid.uuid4().hex[:8]}"
     cfg = {"configurable": {"thread_id": run_id}, "recursion_limit": RECURSION_LIMIT}
 
-    stream_input = _blank_state(run_id, str(DATA_DIR / filename))
+    source_path = str(DATA_DIR / filename)
+    contract = get_registry().get("default")
+    await store.record_run(run_id, source_path, env, contract.name, contract.version,
+                           {"kind": "bundled_csv", "source_id": filename})
+    stream_input = _blank_state(run_id, source_path, env)
     auto_approved = False
     node_sequence: list[str] = []
 
@@ -199,7 +204,7 @@ async def run_full_graph(filename: str, label: str) -> dict:
         break
 
     values = snapshot.values
-    mapping, version = await store.get_current_mapping_version()
+    mapping, version = await store.get_current_mapping_version(env, contract.name, contract)
     return {
         "status": values.get("status"),
         "heal_attempts": values.get("heal_attempts", 0),
@@ -235,6 +240,8 @@ async def main() -> int:
     settings = app_config.get_settings()
     await db.open_pool(settings.database_url)
     await store.init_mapping_table()
+    await store.init_runs_table()
+    await store.init_component_tables()
 
     print("=" * 78)
     print(f"P0 EVAL — baseline vs. full graph, {len(DATASETS)} datasets")

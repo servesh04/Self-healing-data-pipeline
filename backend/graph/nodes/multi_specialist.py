@@ -4,17 +4,19 @@ from graph.nodes.spec_type import spec_type
 from graph.nodes.spec_nullability import spec_nullability
 from graph.nodes.spec_value import spec_value
 from pipeline.mapping import MappingPatch
+from pipeline.contract import Contract, contract_for_state
 
 SPECIALISTS = {"rename": spec_rename, "type": spec_type,
                "nullability": spec_nullability, "value": spec_value}
 
 
-def merge_fragments(fragments: list[dict], renames: dict[str, str] | None = None) -> dict:
+def merge_fragments(fragments: list[dict], renames: dict[str, str] | None = None,
+                    contract: Contract | None = None) -> dict:
     """Normalize post-rename names and reject duplicate or conflicting writes."""
     renames = renames or {}
     merged = {"renames": {}, "casts": {}, "null_policy": {}, "value_maps": {}, "drops": []}
     for fragment in fragments:
-        MappingPatch.model_validate(fragment)
+        MappingPatch.model_validate(fragment, context={"contract": contract} if contract else None)
         for section in ("renames", "casts", "null_policy", "value_maps"):
             for key, value in fragment.get(section, {}).items():
                 normalized = renames.get(key, key) if section != "renames" else key
@@ -60,7 +62,7 @@ async def multi_specialist(state: dict) -> dict:
                     "specialist_output": None, "components": []}
     try:
         renames = {k: v for f in fragments for k, v in f.get("renames", {}).items()}
-        merged = merge_fragments(fragments, renames)
+        merged = merge_fragments(fragments, renames, contract_for_state(state))
     except Exception as exc:
         return {"proposal_error": str(exc), "specialist_outputs": None,
                 "specialist_output": None, "components": []}

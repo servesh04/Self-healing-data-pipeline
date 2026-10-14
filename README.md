@@ -13,6 +13,55 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 
 ---
 
+## Expansion P1 status (verified locally and against live services)
+
+Named contracts now live in `config/contracts/`; `default.yaml` is the canonical
+copy of the former `config/contract.yaml`, which remains for older tooling.
+`compact.yaml` and `data/sources/compact_clean.csv` exercise a different
+column set. `POST /api/runs` accepts `contract_name` (default `default`) and a
+bundled CSV filename. The dashboard contract selector filters runs, mapping
+history, analytics and global chat to that contract. Each run checkpoints the
+contract spec and SHA-256 version, so resume uses the original contract even
+if a registry file changes later.
+
+The idempotent startup migration adds `contract_name='default'` to legacy
+mapping and run rows, backfills mapping parent IDs, and creates
+`mapping_current` pointers per `(pipeline_env, contract_name)`. Writes lock
+and compare that pointer inside one transaction. A rerun that introduces a
+new stable `(column, check)` failure or increases its count appends a rollback
+version restoring the exact parent, provided the failed patch remains current;
+otherwise it escalates for reconciliation. Proposal, decision and outcome
+events are separate from independently supplied correctness labels. The
+calibration panel reports denominators and a Wilson 95% interval only for
+labeled correctness; the confidence threshold remains 0.75.
+
+The migration was checked with local mocks and then applied twice to the
+configured Postgres database after a backup. All 172 legacy mapping rows
+and 47 run records kept their original columns byte-equivalent; 50 legacy
+scopes retained their previous latest mapping IDs. A fresh isolated scope
+passed concurrent CAS, contract isolation and rollback checks. The 11-fixture
+full graph evaluation passed, and local HTTP checks confirmed clean default
+and compact runs plus day6 approval across a real backend process restart.
+The browser check confirmed contract filtering, mapping history and the
+resumed run detail without page errors. The final Python suite passed 137
+tests and the frontend build passed. The original configured mapping pointer
+remained at version 123 after the isolated checks.
+Deployment of the backend remains a separate release gate. Existing
+`config/contract.yaml` edits are no longer read by the registry; update
+`config/contracts/default.yaml` for future runs.
+
+For an isolated integration check after schema migration, run
+`scripts/verify_p1_store.py` against a configured Postgres connection. It
+creates a unique `p1-verify-*` environment, tests concurrent writes and
+rollback, and keeps its audit versions. For HTTP verification, start a local
+backend with a fresh `PIPELINE_ENV=p1-api-*`, then run
+`scripts/verify_p1_api.py --expected-env <that-env> smoke`. The script's
+`start-resume` and `finish-resume --run-id` modes bracket a server restart to
+check checkpoint recovery. The API harness checks `/api/runtime` before any
+mapping request so it cannot accidentally run against a different scope.
+
+---
+
 ## Build status
 
 | Phase | Scope | Status |

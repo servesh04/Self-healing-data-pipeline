@@ -71,6 +71,7 @@ async def lifespan(app: FastAPI):
         await db.init_schema()
         await store.init_mapping_table()
         await store.init_runs_table()
+        await store.init_component_tables()
         await checkpointer.setup_checkpointer()
     except Exception:
         # A cold Neon compute can miss the first statement. Do not crash the
@@ -142,6 +143,12 @@ async def root() -> dict:
 
 
 # ── Authenticated ────────────────────────────────────────────────────────────
+@app.get("/api/runtime", dependencies=[Depends(require_token)], tags=["meta"])
+async def runtime_scope(settings: Settings = Depends(get_settings)) -> dict:
+    """Read-only scope probe for isolated verification before any DB write."""
+    return {"pipeline_env": settings.pipeline_env, "app_env": settings.app_env}
+
+
 @app.get("/api/ping", dependencies=[Depends(require_token)], tags=["meta"])
 async def ping(settings: Settings = Depends(get_settings)) -> dict:
     """Authenticated round-trip that also proves Neon is writable.
@@ -155,6 +162,7 @@ async def ping(settings: Settings = Depends(get_settings)) -> dict:
         await db.init_schema()  # idempotent; covers a failed cold start above
         await store.init_mapping_table()
         await store.init_runs_table()
+        await store.init_component_tables()
         await checkpointer.setup_checkpointer()
         db_info = await db.write_probe("api-ping", settings.app_env)
         db_info["server_version"] = await db.server_version()
@@ -167,6 +175,7 @@ async def ping(settings: Settings = Depends(get_settings)) -> dict:
         "message": "pong",
         "phase": 0,
         "env": settings.app_env,
+        "pipeline_env": settings.pipeline_env,
         "database": {"connected": db_error is None, **db_info}
         | ({"error": db_error} if db_error else {}),
         "versions": {
