@@ -9,6 +9,7 @@ from langgraph.types import Command
 from graph.build import build_graph
 from graph.nodes import diagnose, propose_patch, spec_rename, spec_type, spec_value
 from pipeline.mapping import MappingPatch
+from pipeline.temporal import load_temporal_rule
 from services import store
 
 DATA = Path(__file__).resolve().parents[1] / "data" / "sources"
@@ -123,6 +124,42 @@ def run_graph(graph, filename):
         return (await graph.aget_state(cfg)).values
     return asyncio.run(asyncio.wait_for(stream(), 15),
                        loop_factory=asyncio.ProactorEventLoop), cfg
+
+
+def run_p3_graph(graph, filename):
+    cfg = {"configurable": {"thread_id": filename}, "recursion_limit": 30}
+    state = {**initial(filename), "source_family": "orders_current",
+             "temporal_rule": load_temporal_rule("default", "orders_current"),
+             "run_clock_utc": "2026-10-14T00:00:00+00:00"}
+    async def stream():
+        async for _ in graph.astream(state, config=cfg, stream_mode="updates"):
+            pass
+        return (await graph.aget_state(cfg)).values
+    return asyncio.run(asyncio.wait_for(stream(), 15),
+                       loop_factory=asyncio.ProactorEventLoop)
+
+
+def test_p3_date_repair_runs_atomic_graph_path(monkeypatch):
+    graph, memory = graph_fixture(monkeypatch)
+    result = run_p3_graph(graph, "day9_format_dmy.csv")
+    assert result["status"] == "healed", result.get("final_message")
+    assert result["heal_attempts"] == memory.writes == 1
+    assert result["applied_patch"]["date_parse"] == {"order_date": "dmy_slash_utc"}
+    assert result["temporal_alerts"] == []
+    assert result["temporal_monitor_completed"]
+
+
+@pytest.mark.parametrize("filename,expected", [
+    ("day9_future.csv", "future_date"),
+    ("day9_stale.csv", "stale_batch"),
+])
+def test_p3_temporal_graph_alert_has_no_mapping_write(monkeypatch, filename, expected):
+    graph, memory = graph_fixture(monkeypatch)
+    result = run_p3_graph(graph, filename)
+    assert result["status"] == "alert"
+    assert result["assertions_passed"] is True
+    assert result["heal_attempts"] == memory.writes == 0
+    assert expected in {a["check"] for a in result["temporal_alerts"]}
 
 
 @pytest.mark.parametrize("filename,expected", [

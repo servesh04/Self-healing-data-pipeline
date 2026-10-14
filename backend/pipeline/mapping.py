@@ -53,6 +53,14 @@ NULL_POLICY_REGISTRY: dict[str, Callable[[pd.Series], pd.Series]] = {
 }
 
 
+# Explicit alternate format, locale convention, and timezone are fixed by
+# operation ID. The default strict ISO format stays valid in every version.
+# The contract stores naive datetime64[ns]; values are interpreted in UTC.
+DATE_PARSE_REGISTRY = {
+    "dmy_slash_utc": {"format": "%d/%m/%Y", "locale": "day_first", "timezone": "UTC"},
+}
+
+
 class MappingPatch(BaseModel):
     """The full shape of `config/mapping.yaml` and of every patch applied to it.
 
@@ -68,6 +76,16 @@ class MappingPatch(BaseModel):
     null_policy: dict[str, str] = {}
     drops: list[str] = []
     value_maps: dict[str, dict[str, str]] = {}
+    date_parse: dict[str, str] = {}
+
+    @field_validator("date_parse")
+    @classmethod
+    def _valid_date_parse(cls, value: dict[str, str], info: ValidationInfo) -> dict[str, str]:
+        contract = (info.context or {}).get("contract") or load_contract()
+        for column, operation in value.items():
+            if contract.expected_dtypes.get(column) != "datetime64[ns]" or operation not in DATE_PARSE_REGISTRY:
+                raise ValueError(f"unsupported date parse operation: {column}={operation}")
+        return value
 
     @field_validator("value_maps")
     @classmethod

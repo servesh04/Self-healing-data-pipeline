@@ -1,4 +1,4 @@
-const SECTION_LABEL = { renames: 'renames', casts: 'casts', null_policy: 'null_policy', drops: 'drops', value_maps: 'value_maps' }
+const SECTION_LABEL = { renames: 'renames', casts: 'casts', null_policy: 'null_policy', date_parse: 'date_parse', drops: 'drops', value_maps: 'value_maps' }
 
 function diffLines(patch) {
   if (!patch) return []

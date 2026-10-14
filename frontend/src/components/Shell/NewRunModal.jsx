@@ -12,7 +12,7 @@ export default function NewRunModal() {
   const contractName = useRunStore((s) => s.contractName)
   const sources = useRunStore((s) => s.sources)
   const choices = sources.length ? sources.map((s) => ({ file: s.source_id,
-    label: `${s.source_id}${s.kind === 'database_table' ? ' (database table)' : ''}`,
+    label: `${s.source_id}${s.kind === 'database_table' ? ' (database table)' : s.kind === 'local_json' ? ' (local JSON)' : ''}`,
     available: s.available !== false })) :
     (contractName === 'compact' ? [{ file: 'compact_clean.csv', label: 'compact — clean control' }] : DATASETS)
   useEffect(() => { setDataset(choices.find((s) => s.available !== false)?.file ?? '') }, [contractName, sources])

@@ -3,7 +3,7 @@
 // timeline has to be computed here, against the previous snapshot.
 export function diffMappings(prev, curr) {
   const lines = []
-  for (const section of ['renames', 'casts', 'null_policy']) {
+  for (const section of ['renames', 'casts', 'null_policy', 'date_parse']) {
     const prevObj = prev?.[section] || {}
     const currObj = curr?.[section] || {}
     for (const [k, v] of Object.entries(currObj)) {

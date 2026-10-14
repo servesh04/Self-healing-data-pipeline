@@ -1,0 +1,11 @@
+# Versioned alert rules. Dates are interpreted in UTC against the run's pinned
+# UTC clock. Existing historical demo families have no freshness rule.
+rules:
+  default/orders_current:
+    version: orders-current-v1
+    timezone: UTC
+    column: order_date
+    minimum_valid_rows: 20
+    max_future_skew_days: 1
+    max_freshness_lag_days: 7
+    max_history_days: 60

@@ -13,6 +13,56 @@ A LangGraph agent that repairs a data pipeline when upstream data drifts. See
 
 ---
 
+## Expansion P3 status (verified locally and against live services)
+
+P3 adds an alert-only temporal monitor after distribution monitoring on both
+clean and healed graph paths. `config/temporal_rules.yaml` declares a versioned
+UTC rule for the `default/orders_current` family: future skew, freshness lag,
+and historical window. The API pins the rule, its SHA-256 digest, and the UTC
+run clock before starting the graph, so approval or restart does not move the
+comparison time. The run detail shows the parsed/invalid count, observed date
+range, rule version, and individual alert reasons. Monitoring never writes a
+mapping; a configured monitor error escalates.
+
+The pipeline parses ISO `%Y-%m-%d` dates by default. `date_parse` is a new
+allowlisted mapping section, currently limited to `dmy_slash_utc` for
+`order_date` (`%d/%m/%Y`, day-first, UTC). The deterministic specialist reads
+the complete immutable source and proposes this operation only when every
+date is valid and unambiguous. A persisted date mapping also accepts the
+strict default ISO format, including batches mixing those two explicit
+formats. Ambiguous dates such as `04/05/2026`, malformed dates, and
+unsupported operations escalate. The proposal still
+passes preflight, compare-and-swap persistence, and full rerun validation.
+
+`GET /api/config/sources` now also lists the named local JSON source
+`orders_json_demo`. `config/sources.yaml` fixes its file, records path
+(`payload.orders`), depth, separator, row and byte caps. Nested record objects
+flatten deterministically, nulls stay null, and arrays, key collisions, and
+over-depth records fail closed. The normalized CSV bytes and digest are stored
+in `source_snapshots`, so resumed runs use the same data after restart. The API
+accepts only the source ID, never a client path or JSON normalization rule.
+No HTTP source fetcher is included: its authentication, URL allowlist,
+pagination, retry, rate, payload, and snapshot policy are not specified, so
+HTTP pagination is not applicable to this local JSON release.
+
+The local P3 suite passed 160 tests and the frontend production build passed.
+In an isolated live Postgres/API scope, the day9 control was clean; future and
+stale batches alerted without mapping writes; an ambiguous date escalated
+without a write; the declared DMY format healed with one guarded mapping
+write; and named JSON normalized and validated cleanly. Restoring its deleted
+local cache from `source_snapshots` reproduced the saved digest. After the DMY
+mapping was saved, a 1,002-row ISO dated named Postgres table and a new JSON
+run both stayed clean. The marked temporary table was removed and the
+configured dashboard mapping pointer remained at version 123. Browser checks
+covered the source picker, temporal graph path, alert detail, date patch, and
+JSON run with zero page errors. The final isolated database/LLM graph sweep
+passed 11/11 existing fixtures. One earlier sweep required synthetic review
+for the mixed fixture after the model assigned lower confidence; an isolated
+repeat and the final full sweep healed it unattended. No false auto-apply was
+observed. Deployment remains a separate release gate.
+
+---
+
 ## Expansion P1 status (verified locally and against live services)
 
 Named contracts now live in `config/contracts/`; `default.yaml` is the canonical

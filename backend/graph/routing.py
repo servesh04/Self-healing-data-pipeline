@@ -26,7 +26,7 @@ def route_after_diagnose(state: HealState) -> str:
         return "escalate"
     if len(state["candidates"]) > 1:
         return "multi_specialist"
-    if state["drift_class"] in ("rename", "type", "nullability", "value"):
+    if state["drift_class"] in ("rename", "type", "nullability", "value", "date_parse"):
         return f"spec_{state['drift_class']}"
     return "escalate"
 

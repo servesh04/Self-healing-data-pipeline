@@ -261,11 +261,13 @@ _STUB_NAMES = (
     "spec_type",
     "spec_nullability",
     "spec_value",
+    "spec_date_parse",
     "multi_specialist",
     "propose_patch",
     "apply_patch",
     "rerun_validate",
     "monitor_distribution",
+    "monitor_temporal",
 )
 
 
@@ -360,6 +362,9 @@ def _default_stub_bodies() -> dict:
     def monitor_distribution(state):
         return {"distribution_alerts": [], "distribution_skipped": []}
 
+    def monitor_temporal(state):
+        return {"temporal_alerts": [], "temporal_skipped": [], "temporal_monitor_completed": True}
+
     return {
         "run_pipeline": run_pipeline,
         "profile_source": profile_source,
@@ -369,11 +374,13 @@ def _default_stub_bodies() -> dict:
         "spec_type": specialist,
         "spec_nullability": specialist,
         "spec_value": specialist,
+        "spec_date_parse": specialist,
         "multi_specialist": specialist,
         "propose_patch": propose_patch,
         "apply_patch": apply_patch,
         "rerun_validate": rerun_validate,
         "monitor_distribution": monitor_distribution,
+        "monitor_temporal": monitor_temporal,
     }
 
 

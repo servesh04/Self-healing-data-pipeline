@@ -1,5 +1,17 @@
 # Self-Healing Data Pipeline — Architecture
 
+> **Expansion P3 addendum (2026-10-14):** The original phase narrative below
+> describes the initial build. The current graph also routes a schema-passing
+> batch through `monitor_distribution → monitor_temporal → commit_report` on
+> clean and healed paths. The temporal node reads a rule/digest and UTC clock
+> pinned at run creation; it emits alert-only future, stale, and history-window
+> findings. The separate deterministic `spec_date_parse` proposes only the
+> allowlisted `date_parse.order_date=dmy_slash_utc` mapping operation for a
+> fully valid, unambiguous complete source. Local JSON source IDs normalize
+> bounded nested records into a persisted digest-checked CSV snapshot before
+> the common load/apply/transform/validate pipeline. See the expansion plan
+> and README for current verification status.
+
 > **For Claude Code:** This document is the single source of truth for this build.
 > Follow phases in order. Each phase is time-boxed and independently demoable.
 >

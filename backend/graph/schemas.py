@@ -35,12 +35,12 @@ def normalize_llm_json(raw: dict | list) -> list[dict]:
         return [item for item in raw if isinstance(item, dict)]
     return []
 
-from pipeline.mapping import CAST_REGISTRY, NULL_POLICY_REGISTRY
+from pipeline.mapping import CAST_REGISTRY, NULL_POLICY_REGISTRY, DATE_PARSE_REGISTRY
 
 
 class FixCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    drift_class: str = Field(pattern="^(rename|type|nullability|value)$")
+    drift_class: str = Field(pattern="^(rename|type|nullability|value|date_parse)$")
     finding_ids: list[str] = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -53,7 +53,7 @@ class DiagnoseOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    drift_class: str = Field(pattern="^(rename|type|nullability|value|mixed|unknown)$")
+    drift_class: str = Field(pattern="^(rename|type|nullability|value|date_parse|mixed|unknown)$")
     diagnosis: str
     confidence: float = Field(ge=0.0, le=1.0)
     candidates: list[FixCandidate] = []
@@ -109,6 +109,18 @@ class ValueSpecialistOutput(BaseModel):
     value_maps: dict[str, dict[str, str]] = {}
 
 
+class DateParseSpecialistOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    date_parse: dict[str, str] = {}
+
+    @field_validator("date_parse")
+    @classmethod
+    def _known_ops(cls, value: dict[str, str]) -> dict[str, str]:
+        if set(value.values()) - set(DATE_PARSE_REGISTRY):
+            raise ValueError("unknown date parse operation")
+        return value
+
+
 # drift_class -> the specialist output model that must validate its raw
 # output before propose_patch (or anything else) ever touches it.
 SPECIALIST_SCHEMAS: dict[str, type[BaseModel]] = {
@@ -116,6 +128,7 @@ SPECIALIST_SCHEMAS: dict[str, type[BaseModel]] = {
     "type": TypeSpecialistOutput,
     "nullability": NullabilitySpecialistOutput,
     "value": ValueSpecialistOutput,
+    "date_parse": DateParseSpecialistOutput,
 }
 
 

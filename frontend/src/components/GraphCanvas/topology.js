@@ -5,14 +5,15 @@
 // there is nothing here that needs a real layout engine.
 
 export const VIEW_W = 1000
-export const VIEW_H = 860
+export const VIEW_H = 950
 export const NODE_W = 148
 export const NODE_H = 46
 
 export const NODES = [
   { id: 'run_pipeline', label: 'run_pipeline', x: 500, y: 40, kind: 'process' },
   { id: 'monitor_distribution', label: 'monitor_distribution', x: 160, y: 690, kind: 'process' },
-  { id: 'commit_report', label: 'commit_report', x: 160, y: 790, kind: 'terminal' },
+  { id: 'monitor_temporal', label: 'monitor_temporal', x: 160, y: 785, kind: 'process' },
+  { id: 'commit_report', label: 'commit_report', x: 160, y: 880, kind: 'terminal' },
   { id: 'profile_source', label: 'profile_source', x: 500, y: 150, kind: 'process' },
   { id: 'diff_contract', label: 'diff_contract', x: 500, y: 240, kind: 'process' },
   { id: 'diagnose', label: 'diagnose', x: 500, y: 330, kind: 'llm' },
@@ -20,12 +21,13 @@ export const NODES = [
   { id: 'spec_type', label: 'spec_type', x: 500, y: 420, kind: 'llm' },
   { id: 'spec_nullability', label: 'spec_nullability', x: 740, y: 420, kind: 'llm' },
   { id: 'spec_value', label: 'spec_value', x: 160, y: 510, kind: 'llm' },
+  { id: 'spec_date_parse', label: 'spec_date_parse', x: 300, y: 510, kind: 'process' },
   { id: 'multi_specialist', label: 'multi_specialist', x: 840, y: 510, kind: 'llm' },
   { id: 'propose_patch', label: 'propose_patch', x: 500, y: 510, kind: 'llm' },
   { id: 'human_approval', label: 'human_approval', x: 760, y: 600, kind: 'gate' },
   { id: 'apply_patch', label: 'apply_patch', x: 500, y: 600, kind: 'process' },
   { id: 'rerun_validate', label: 'rerun_validate', x: 500, y: 690, kind: 'process' },
-  { id: 'escalate', label: 'escalate', x: 840, y: 790, kind: 'terminal' },
+  { id: 'escalate', label: 'escalate', x: 840, y: 880, kind: 'terminal' },
 ]
 
 export const NODE_BY_ID = Object.fromEntries(NODES.map((n) => [n.id, n]))
@@ -41,12 +43,14 @@ export const EDGES = [
   { from: 'diagnose', to: 'spec_type', type: 'straight' },
   { from: 'diagnose', to: 'spec_nullability', type: 'straight' },
   { from: 'diagnose', to: 'spec_value', type: 'straight' },
+  { from: 'diagnose', to: 'spec_date_parse', type: 'straight' },
   { from: 'diagnose', to: 'multi_specialist', type: 'straight' },
   { from: 'diagnose', to: 'escalate', type: 'curve', label: 'unknown', side: 'right' },
   { from: 'spec_rename', to: 'propose_patch', type: 'straight' },
   { from: 'spec_type', to: 'propose_patch', type: 'straight' },
   { from: 'spec_nullability', to: 'propose_patch', type: 'straight' },
   { from: 'spec_value', to: 'propose_patch', type: 'straight' },
+  { from: 'spec_date_parse', to: 'propose_patch', type: 'straight' },
   { from: 'multi_specialist', to: 'propose_patch', type: 'straight' },
   { from: 'apply_patch', to: 'escalate', type: 'curve', label: 'failed preflight', side: 'right' },
   { from: 'propose_patch', to: 'apply_patch', type: 'straight', label: 'high' },
@@ -55,7 +59,8 @@ export const EDGES = [
   { from: 'human_approval', to: 'escalate', type: 'straight', label: 'reject' },
   { from: 'apply_patch', to: 'rerun_validate', type: 'straight' },
   { from: 'rerun_validate', to: 'monitor_distribution', type: 'straight', label: 'schema pass' },
-  { from: 'monitor_distribution', to: 'commit_report', type: 'straight' },
+  { from: 'monitor_distribution', to: 'monitor_temporal', type: 'straight' },
+  { from: 'monitor_temporal', to: 'commit_report', type: 'straight' },
   { from: 'rerun_validate', to: 'diff_contract', type: 'loop', label: 'fail, < 3' },
   { from: 'rerun_validate', to: 'escalate', type: 'curve', label: 'cap', side: 'right' },
 ]
@@ -81,7 +86,7 @@ export function deriveVisited(detail) {
   }
   if (detail.drift_class) {
     visited.add('diagnose')
-    if (['rename', 'type', 'nullability', 'value'].includes(detail.drift_class)) {
+    if (['rename', 'type', 'nullability', 'value', 'date_parse'].includes(detail.drift_class)) {
       visited.add(`spec_${detail.drift_class}`)
       visited.add('propose_patch')
     }
@@ -101,10 +106,11 @@ export function deriveVisited(detail) {
   if (detail.monitor_completed) {
     visited.add('monitor_distribution')
   }
-  if (detail.status === 'healed' || detail.status === 'clean' || detail.status === 'alert' || detail.monitor_completed) {
+  if (detail.temporal_monitor_completed) visited.add('monitor_temporal')
+  if (detail.status === 'healed' || detail.status === 'clean' || detail.status === 'alert' || detail.temporal_monitor_completed) {
     visited.add('commit_report')
   }
-  if (detail.status === 'escalated' && !detail.monitor_completed) {
+  if (detail.status === 'escalated' && !detail.temporal_monitor_completed) {
     visited.add('escalate')
   }
   // Every completed heal attempt proves at least one more lap through the

@@ -1,6 +1,7 @@
 """Named CSV and read-only Postgres table sources with persistent snapshots."""
 
 import csv
+import json
 from dataclasses import dataclass
 from io import BytesIO, StringIO
 import hashlib
@@ -32,6 +33,8 @@ class MaterializedSource:
 
 
 def _family(source_id: str) -> str | None:
+    if source_id.startswith("day9_"):
+        return "orders_current"
     if source_id in {"day1_clean.csv", "day8_revenue_shift.csv",
                      "day8_normal_control.csv", "day8_low_sample.csv"}:
         return "orders"
@@ -43,6 +46,11 @@ def _database_specs() -> dict:
     return raw.get("database_tables") or {}
 
 
+def _json_specs() -> dict:
+    raw = yaml.safe_load(SOURCE_CONFIG.read_text(encoding="utf-8")) or {}
+    return raw.get("local_json") or {}
+
+
 def list_sources(contract_name: str | None = None) -> list[dict]:
     csv_sources = [{"source_id": path.name, "kind": "bundled_csv", "family": _family(path.name),
                     "contract_name": "compact" if path.name == "compact_clean.csv" else "default"}
@@ -50,7 +58,90 @@ def list_sources(contract_name: str | None = None) -> list[dict]:
     db_sources = [{"source_id": name, "kind": "database_table", "family": spec.get("family"),
                    "contract_name": spec["contract_name"], "available": bool(os.environ.get(spec["connection_env"]))}
                   for name, spec in sorted(_database_specs().items())]
-    return [s for s in csv_sources + db_sources if contract_name is None or s["contract_name"] == contract_name]
+    json_sources = [{"source_id": name, "kind": "local_json", "family": spec.get("family"),
+                     "contract_name": spec["contract_name"]}
+                    for name, spec in sorted(_json_specs().items())]
+    return [s for s in csv_sources + db_sources + json_sources
+            if contract_name is None or s["contract_name"] == contract_name]
+
+
+def flatten_record(record: dict, max_depth: int, separator: str = "__") -> dict:
+    """Flatten objects only; duplicate targets and arrays fail closed."""
+    if not isinstance(record, dict) or not separator or max_depth < 1:
+        raise ValueError("invalid JSON flatten policy")
+    flat = {}
+    def visit(obj: dict, prefix: str, depth: int) -> None:
+        if depth > max_depth:
+            raise ValueError("JSON nesting exceeds depth cap")
+        for key, value in obj.items():
+            if not isinstance(key, str) or not key or separator in key:
+                raise ValueError("JSON key conflicts with flatten separator")
+            name = f"{prefix}{separator}{key}" if prefix else key
+            if name in flat:
+                raise ValueError("JSON flatten collision")
+            if isinstance(value, dict):
+                visit(value, name, depth + 1)
+            elif isinstance(value, list):
+                raise ValueError("unexpected JSON array")
+            elif value is None or isinstance(value, (str, int, float, bool)):
+                flat[name] = value
+            else:
+                raise ValueError("unsupported JSON value")
+    visit(record, "", 1)
+    return flat
+
+
+async def _json_source(source_id: str, spec: dict, contract_name: str, run_id: str) -> MaterializedSource:
+    if spec["contract_name"] != contract_name:
+        raise ValueError("source does not belong to selected contract")
+    file_name = spec.get("file")
+    if not isinstance(file_name, str) or Path(file_name).name != file_name or not file_name.endswith(".json"):
+        raise ValueError("invalid JSON source config")
+    path = (CSV_DIR / file_name).resolve()
+    if path.parent != CSV_DIR.resolve() or not path.is_file():
+        raise ValueError("JSON source unavailable")
+    byte_cap, row_cap = int(spec["byte_cap"]), int(spec["row_cap"])
+    if not 1 <= byte_cap <= 10000000 or not 1 <= row_cap <= 100000:
+        raise ValueError("invalid JSON source cap")
+    with path.open("rb") as handle:
+        raw = handle.read(byte_cap + 1)
+    if len(raw) > byte_cap:
+        raise ValueError("JSON source exceeds byte cap")
+    try:
+        document = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid JSON source") from exc
+    records = document
+    for segment in spec["records_path"].split("."):
+        if not isinstance(records, dict) or segment not in records:
+            raise ValueError("JSON records path missing")
+        records = records[segment]
+    if not isinstance(records, list) or len(records) > row_cap:
+        raise ValueError("JSON records must be an array within row cap")
+    max_depth = int(spec["max_depth"])
+    separator = spec.get("separator", "__")
+    flattened = [flatten_record(record, max_depth, separator) for record in records]
+    columns = sorted({key for record in flattened for key in record})
+    if not columns:
+        raise ValueError("JSON source has no columns")
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
+    writer.writeheader()
+    for record in flattened:
+        writer.writerow(record)
+        if output.tell() > byte_cap:
+            raise ValueError("normalized JSON exceeds byte cap")
+    payload = output.getvalue().encode("utf-8")
+    if len(payload) > byte_cap:
+        raise ValueError("normalized JSON exceeds byte cap")
+    digest = hashlib.sha256(payload).hexdigest()
+    await store.save_source_snapshot(run_id, source_id, payload, digest, len(records), min(len(records), PROFILE_LIMIT))
+    SNAPSHOT_DIR.mkdir(exist_ok=True)
+    snapshot_path = SNAPSHOT_DIR / f"{run_id}.csv"
+    snapshot_path.write_bytes(payload)
+    ref = {"kind": "local_json", "source_id": source_id, "sha256": digest,
+           "row_count": len(records), "profile_rows": min(len(records), PROFILE_LIMIT)}
+    return MaterializedSource(source_id, str(snapshot_path), spec.get("family"), ref, digest)
 
 
 def _csv_source(source_id: str, contract_name: str) -> MaterializedSource:
@@ -70,6 +161,8 @@ def _csv_source(source_id: str, contract_name: str) -> MaterializedSource:
 async def materialize_source(source_id: str, contract_name: str, run_id: str) -> MaterializedSource:
     if not isinstance(source_id, str) or not source_id or Path(source_id).name != source_id or any(c in source_id for c in ("/", "\\", "\0")):
         raise ValueError("unknown source ID")
+    if source_id in _json_specs():
+        return await _json_source(source_id, _json_specs()[source_id], contract_name, run_id)
     if source_id not in _database_specs():
         return _csv_source(source_id, contract_name)
     spec = _database_specs()[source_id]
@@ -143,7 +236,7 @@ class SourceUnavailable(RuntimeError):
 async def ensure_source_path(state: dict) -> str:
     ref = state.get("source_ref") or {}
     path = Path(state["source_path"])
-    if ref.get("kind") != "database_table":
+    if ref.get("kind") not in {"database_table", "local_json"}:
         return str(path)
     expected = ref["sha256"]
     if not path.is_file():

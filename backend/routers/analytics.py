@@ -18,8 +18,8 @@ from pipeline.contract import get_registry
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[Depends(require_token)])
 
-DRIFT_CLASSES = ["rename", "type", "nullability", "value", "unknown"]
-SPECIALISTS = ["spec_rename", "spec_type", "spec_nullability", "spec_value"]
+DRIFT_CLASSES = ["rename", "type", "nullability", "value", "date_parse", "unknown"]
+SPECIALISTS = ["spec_rename", "spec_type", "spec_nullability", "spec_value", "spec_date_parse"]
 
 
 def _validate_contract_name(name: str) -> None:
@@ -98,7 +98,9 @@ async def summary(
         "mean_heal_attempts": round(mean_heal_attempts, 2),
         "attempted_runs": len(attempted),  # the mean's actual denominator -- surfaced so it's never a mystery number
         "clean_runs": clean,
-        "distribution_alerts": alerts,
+        "alert_runs": alerts,
+        "distribution_alerts": sum(bool(r.get("distribution_alerts")) for r in runs),
+        "temporal_alerts": sum(bool(r.get("temporal_alerts")) for r in runs),
     }
 
 

@@ -74,6 +74,21 @@ export default function RunDetail() {
       {detail?.distribution_skipped?.some((item) => item.reason === 'insufficient sample') && (
         <p className="text-xs text-ink-muted">Distribution check skipped: sample below the monitoring minimum.</p>
       )}
+      {detail?.temporal_alerts?.length > 0 && (
+        <div className="rounded border border-signal bg-signal/10 px-3 py-2 text-xs text-signal">
+          Temporal alert against {detail.temporal_profile?.rule_id} · {detail.temporal_profile?.rule_version}
+          {detail.temporal_alerts.map((alert) => (
+            <p key={alert.check} className="mt-1">{alert.check}: {alert.count} affected</p>
+          ))}
+          {detail.temporal_profile && (
+            <p className="mt-1">Parsed {detail.temporal_profile.parsed_count} of {detail.temporal_profile.row_count} dates; {detail.temporal_profile.invalid_count} invalid. Range: {detail.temporal_profile.minimum} to {detail.temporal_profile.maximum}.</p>
+          )}
+          <p className="mt-1">UTC run clock: {detail.run_clock_utc}</p>
+        </div>
+      )}
+      {detail?.temporal_skipped?.some((item) => item.reason === 'insufficient sample') && (
+        <p className="text-xs text-ink-muted">Temporal check skipped: sample below the monitoring minimum.</p>
+      )}
 
       {/* GraphCanvas takes the remaining width; supporting detail moves into
           a fixed 380px sidebar (DASHBOARD.md's only two run-detail layout

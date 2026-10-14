@@ -25,8 +25,10 @@ from graph.nodes.spec_nullability import spec_nullability
 from graph.nodes.spec_rename import spec_rename
 from graph.nodes.spec_type import spec_type
 from graph.nodes.spec_value import spec_value
+from graph.nodes.spec_date_parse import spec_date_parse
 from graph.nodes.multi_specialist import multi_specialist
 from graph.nodes.monitor_distribution import monitor_distribution
+from graph.nodes.monitor_temporal import monitor_temporal
 from graph.routing import (
     route_after_confidence,
     route_after_diagnose,
@@ -48,6 +50,7 @@ def build_graph(checkpointer):
     g.add_node("spec_type", spec_type)
     g.add_node("spec_nullability", spec_nullability)
     g.add_node("spec_value", spec_value)
+    g.add_node("spec_date_parse", spec_date_parse)
     g.add_node("multi_specialist", multi_specialist)
     g.add_node("propose_patch", propose_patch)
     g.add_node("human_approval", human_approval)
@@ -56,6 +59,7 @@ def build_graph(checkpointer):
     g.add_node("escalate", escalate)
     g.add_node("commit_report", commit_report)
     g.add_node("monitor_distribution", monitor_distribution)
+    g.add_node("monitor_temporal", monitor_temporal)
 
     g.add_edge(START, "run_pipeline")
 
@@ -75,6 +79,7 @@ def build_graph(checkpointer):
             "spec_type": "spec_type",
             "spec_nullability": "spec_nullability",
             "spec_value": "spec_value",
+            "spec_date_parse": "spec_date_parse",
             "multi_specialist": "multi_specialist",
             "escalate": "escalate",
         },
@@ -83,6 +88,7 @@ def build_graph(checkpointer):
     g.add_edge("spec_type", "propose_patch")
     g.add_edge("spec_nullability", "propose_patch")
     g.add_edge("spec_value", "propose_patch")
+    g.add_edge("spec_date_parse", "propose_patch")
     g.add_edge("multi_specialist", "propose_patch")
 
     g.add_conditional_edges(
@@ -108,7 +114,8 @@ def build_graph(checkpointer):
         },
     )
 
-    g.add_edge("monitor_distribution", "commit_report")
+    g.add_edge("monitor_distribution", "monitor_temporal")
+    g.add_edge("monitor_temporal", "commit_report")
     g.add_edge("commit_report", END)
     g.add_edge("escalate", END)
 

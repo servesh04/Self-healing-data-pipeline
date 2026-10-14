@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 def merge_mapping(current: MappingPatch, patch: dict, contract: Contract | None = None) -> MappingPatch:
     candidate = merge_fragments([patch], contract=contract)
-    for section in ("renames", "casts", "null_policy"):
+    for section in ("renames", "casts", "null_policy", "date_parse"):
         existing = getattr(current, section)
         overlap = set(existing) & set(candidate.get(section, {}))
         if overlap:
@@ -32,6 +32,7 @@ def merge_mapping(current: MappingPatch, patch: dict, contract: Contract | None 
         renames={**current.renames, **candidate.get("renames", {})},
         casts={**current.casts, **candidate.get("casts", {})},
         null_policy={**current.null_policy, **candidate.get("null_policy", {})},
+        date_parse={**current.date_parse, **candidate.get("date_parse", {})},
         drops=list(dict.fromkeys([*current.drops, *candidate.get("drops", [])])),
         value_maps=maps,
     ), context={"contract": contract} if contract else None)

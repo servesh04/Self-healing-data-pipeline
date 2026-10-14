@@ -21,6 +21,7 @@ every request costs one metadata SELECT, not a real setup re-run.
 import logging
 import asyncio
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
@@ -34,6 +35,7 @@ from services import checkpointer, store
 from services.analytics import collect_run_summaries, invalidate_run_summaries
 from pipeline.contract import get_registry
 from pipeline.distribution import load_baseline
+from pipeline.temporal import load_temporal_rule
 from pipeline.sources import SourceUnavailable, materialize_source
 from config import get_settings
 
@@ -95,7 +97,8 @@ class ApprovalRequest(BaseModel):
 def _blank_state(run_id: str, source_path: str, contract_name: str = "default",
                  contract_version: str | None = None, contract_snapshot: dict | None = None,
                  pipeline_env: str | None = None, source_family: str | None = None,
-                 source_ref: dict | None = None, distribution_baseline: dict | None = None) -> dict:
+                 source_ref: dict | None = None, distribution_baseline: dict | None = None,
+                 temporal_rule: dict | None = None, run_clock_utc: str | None = None) -> dict:
     return {
         "run_id": run_id,
         "source_path": source_path,
@@ -110,6 +113,14 @@ def _blank_state(run_id: str, source_path: str, contract_name: str = "default",
         "distribution_baseline_digest": None,
         "monitor_error": None,
         "monitor_completed": False,
+        "temporal_rule": temporal_rule,
+        "run_clock_utc": run_clock_utc,
+        "temporal_alerts": [],
+        "temporal_skipped": [],
+        "temporal_profile": {},
+        "temporal_rule_digest": None,
+        "temporal_monitor_error": None,
+        "temporal_monitor_completed": False,
         "contract_name": contract_name,
         "contract_version": contract_version,
         "contract_snapshot": contract_snapshot,
@@ -229,7 +240,7 @@ def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = N
     return {
         **values,
         "source_id": source_ref.get("source_id") or Path(values.get("source_path") or "").name,
-        "source_path": (source_ref["source_id"] if source_ref.get("kind") == "database_table"
+        "source_path": (source_ref["source_id"] if source_ref.get("kind") in {"database_table", "local_json"}
                         else values.get("source_path")),
         "run_id": run_id,
         "api_status": api_status,
@@ -258,6 +269,7 @@ async def trigger_run(
     try:
         source = await materialize_source(source_id, contract.name, run_id)
         baseline = load_baseline(contract.name, source.family)
+        temporal_rule = load_temporal_rule(contract.name, source.family)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except SourceUnavailable as exc:
@@ -266,7 +278,8 @@ async def trigger_run(
     invalidate_run_summaries(env, contract.name)
     background.add_task(_execute, graph_app, run_id,
                         _blank_state(run_id, source.path, contract.name, contract.version, contract.spec, env,
-                                     source.family, source.ref, baseline),
+                                     source.family, source.ref, baseline, temporal_rule,
+                                     datetime.now(timezone.utc).isoformat()),
                         env, contract.name)
     return {"run_id": run_id}
 

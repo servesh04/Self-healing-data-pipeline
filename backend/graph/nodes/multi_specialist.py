@@ -3,21 +3,22 @@ from graph.nodes.spec_rename import spec_rename
 from graph.nodes.spec_type import spec_type
 from graph.nodes.spec_nullability import spec_nullability
 from graph.nodes.spec_value import spec_value
+from graph.nodes.spec_date_parse import spec_date_parse
 from pipeline.mapping import MappingPatch
 from pipeline.contract import Contract, contract_for_state
 
 SPECIALISTS = {"rename": spec_rename, "type": spec_type,
-               "nullability": spec_nullability, "value": spec_value}
+               "nullability": spec_nullability, "value": spec_value, "date_parse": spec_date_parse}
 
 
 def merge_fragments(fragments: list[dict], renames: dict[str, str] | None = None,
                     contract: Contract | None = None) -> dict:
     """Normalize post-rename names and reject duplicate or conflicting writes."""
     renames = renames or {}
-    merged = {"renames": {}, "casts": {}, "null_policy": {}, "value_maps": {}, "drops": []}
+    merged = {"renames": {}, "casts": {}, "null_policy": {}, "value_maps": {}, "date_parse": {}, "drops": []}
     for fragment in fragments:
         MappingPatch.model_validate(fragment, context={"contract": contract} if contract else None)
-        for section in ("renames", "casts", "null_policy", "value_maps"):
+        for section in ("renames", "casts", "null_policy", "value_maps", "date_parse"):
             for key, value in fragment.get(section, {}).items():
                 normalized = renames.get(key, key) if section != "renames" else key
                 if section == "value_maps" and normalized in merged[section]:
@@ -34,7 +35,7 @@ def merge_fragments(fragments: list[dict], renames: dict[str, str] | None = None
             merged["drops"].append(key)
     if set(merged["renames"].values()) & set(merged["renames"]):
         raise ValueError("chained renames are not supported")
-    for section in ("casts", "null_policy", "value_maps"):
+    for section in ("casts", "null_policy", "value_maps", "date_parse"):
         if set(merged[section]) & set(merged["drops"]):
             raise ValueError("operation targets a dropped column")
     return {k: v for k, v in merged.items() if v}

@@ -1,0 +1,281 @@
+{
+  "payload": {
+    "orders": [
+      {
+        "region": "North",
+        "revenue": 50.0,
+        "order": {
+          "id": 1,
+          "date": "2026-10-13"
+        },
+        "customer": {
+          "id": 1000
+        }
+      },
+      {
+        "region": "South",
+        "revenue": 95.37,
+        "order": {
+          "id": 2,
+          "date": "2026-10-12"
+        },
+        "customer": {
+          "id": 1001
+        }
+      },
+      {
+        "region": "East",
+        "revenue": 140.74,
+        "order": {
+          "id": 3,
+          "date": "2026-10-11"
+        },
+        "customer": {
+          "id": 1002
+        }
+      },
+      {
+        "region": "West",
+        "revenue": 186.11,
+        "order": {
+          "id": 4,
+          "date": "2026-10-10"
+        },
+        "customer": {
+          "id": 1003
+        }
+      },
+      {
+        "region": "North",
+        "revenue": 231.48,
+        "order": {
+          "id": 5,
+          "date": "2026-10-09"
+        },
+        "customer": {
+          "id": 1004
+        }
+      },
+      {
+        "region": "South",
+        "revenue": 276.85,
+        "order": {
+          "id": 6,
+          "date": "2026-10-13"
+        },
+        "customer": {
+          "id": 1005
+        }
+      },
+      {
+        "region": "East",
+        "revenue": 322.22,
+        "order": {
+          "id": 7,
+          "date": "2026-10-12"
+        },
+        "customer": {
+          "id": 1006
+        }
+      },
+      {
+        "region": "West",
+        "revenue": 367.59,
+        "order": {
+          "id": 8,
+          "date": "2026-10-11"
+        },
+        "customer": {
+          "id": 1007
+        }
+      },
+      {
+        "region": "North",
+        "revenue": 412.96,
+        "order": {
+          "id": 9,
+          "date": "2026-10-10"
+        },
+        "customer": {
+          "id": 1008
+        }
+      },
+      {
+        "region": "South",
+        "revenue": 458.33,
+        "order": {
+          "id": 10,
+          "date": "2026-10-09"
+        },
+        "customer": {
+          "id": 1009
+        }
+      },
+      {
+        "region": "East",
+        "revenue": 503.7,
+        "order": {
+          "id": 11,
+          "date": "2026-10-13"
+        },
+        "customer": {
+          "id": 1010
+        }
+      },
+      {
+        "region": "West",
+        "revenue": 549.07,
+        "order": {
+          "id": 12,
+          "date": "2026-10-12"
+        },
+        "customer": {
+          "id": 1011
+        }
+      },
+      {
+        "region": "North",
+        "revenue": 594.44,
+        "order": {
+          "id": 13,
+          "date": "2026-10-11"
+        },
+        "customer": {
+          "id": 1012
+        }
+      },
+      {
+        "region": "South",
+        "revenue": 639.81,
+        "order": {
+          "id": 14,
+          "date": "2026-10-10"
+        },
+        "customer": {
+          "id": 1013
+        }
+      },
+      {
+        "region": "East",
+        "revenue": 685.18,
+        "order": {
+          "id": 15,
+          "date": "2026-10-09"
+        },
+        "customer": {
+          "id": 1014
+        }
+      },
+      {
+        "region": "West",
+        "revenue": 730.55,
+        "order": {
+          "id": 16,
+          "date": "2026-10-13"
+        },
+        "customer": {
+          "id": 1015
+        }
+      },
+      {
+        "region": "North",
+        "revenue": 775.92,
+        "order": {
+          "id": 17,
+          "date": "2026-10-12"
+        },
+        "customer": {
+          "id": 1016
+        }
+      },
+      {
+        "region": "South",
+        "revenue": 821.29,
+        "order": {
+          "id": 18,
+          "date": "2026-10-11"
+        },
+        "customer": {
+          "id": 1017
+        }
+      },
+      {
+        "region": "East",
+        "revenue": 866.66,
+        "order": {
+          "id": 19,
+          "date": "2026-10-10"
+        },
+        "customer": {
+          "id": 1018
+        }
+      },
+      {
+        "region": "West",
+        "revenue": 912.03,
+        "order": {
+          "id": 20,
+          "date": "2026-10-09"
+        },
+        "customer": {
+          "id": 1019
+        }
+      },
+      {
+        "region": "North",
+        "revenue": 957.4,
+        "order": {
+          "id": 21,
+          "date": "2026-10-13"
+        },
+        "customer": {
+          "id": 1020
+        }
+      },
+      {
+        "region": "South",
+        "revenue": 1002.77,
+        "order": {
+          "id": 22,
+          "date": "2026-10-12"
+        },
+        "customer": {
+          "id": 1021
+        }
+      },
+      {
+        "region": "East",
+        "revenue": 1048.14,
+        "order": {
+          "id": 23,
+          "date": "2026-10-11"
+        },
+        "customer": {
+          "id": 1022
+        }
+      },
+      {
+        "region": "West",
+        "revenue": 1093.51,
+        "order": {
+          "id": 24,
+          "date": "2026-10-10"
+        },
+        "customer": {
+          "id": 1023
+        }
+      },
+      {
+        "region": "North",
+        "revenue": 1138.88,
+        "order": {
+          "id": 25,
+          "date": "2026-10-09"
+        },
+        "customer": {
+          "id": 1024
+        }
+      }
+    ]
+  }
+}

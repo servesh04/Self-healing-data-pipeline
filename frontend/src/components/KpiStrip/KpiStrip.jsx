@@ -21,7 +21,7 @@ export default function KpiStrip({ summary, unknownEscalated }) {
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <Kpi label="Runs" figure={summary.total_runs} sub={`${summary.drifted_runs} schema drift · ${summary.distribution_alerts ?? 0} alerts`} />
+      <Kpi label="Runs" figure={summary.total_runs} sub={`${summary.drifted_runs} schema drift · ${summary.alert_runs ?? summary.distribution_alerts ?? 0} alerts`} />
       <Kpi
         label="Auto-heal"
         figure={`${autoHealPct}%`}

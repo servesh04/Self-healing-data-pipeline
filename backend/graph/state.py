@@ -73,7 +73,7 @@ class HealState(TypedDict):
     drift_items: list[DriftItem]
 
     # ── Diagnosis (LLM in Phase 3; hardcoded in Phase 2) ──
-    drift_class: Optional[Literal["rename", "type", "nullability", "value", "mixed", "unknown"]]
+    drift_class: Optional[Literal["rename", "type", "nullability", "value", "date_parse", "mixed", "unknown"]]
     diagnosis: Optional[str]
     confidence: Optional[float]  # 0.0 – 1.0
     candidates: list[dict]
@@ -96,6 +96,14 @@ class HealState(TypedDict):
     distribution_baseline: Optional[dict]
     monitor_error: Optional[str]
     monitor_completed: bool
+    temporal_rule: Optional[dict]
+    run_clock_utc: Optional[str]
+    temporal_alerts: list[dict]
+    temporal_skipped: list[dict]
+    temporal_profile: dict
+    temporal_rule_digest: Optional[str]
+    temporal_monitor_error: Optional[str]
+    temporal_monitor_completed: bool
     patch_error: Optional[str]
     proposal_error: Optional[str]
     components: list[dict]
@@ -109,7 +117,7 @@ class HealState(TypedDict):
     heal_attempts: int
 
     # ── Terminal ──
-    status: Literal["running", "healed", "escalated", "clean", "awaiting_approval"]
+    status: Literal["running", "healed", "escalated", "clean", "alert", "awaiting_approval"]
     final_message: Optional[str]
 
     # ── Audit trail — append-only, drives the UI ──

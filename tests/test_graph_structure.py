@@ -36,6 +36,7 @@ ALL_NODE_NAMES = {
     "spec_type",
     "spec_nullability",
     "spec_value",
+    "spec_date_parse",
     "multi_specialist",
     "propose_patch",
     "human_approval",
@@ -44,6 +45,7 @@ ALL_NODE_NAMES = {
     "escalate",
     "commit_report",
     "monitor_distribution",
+    "monitor_temporal",
 }
 
 

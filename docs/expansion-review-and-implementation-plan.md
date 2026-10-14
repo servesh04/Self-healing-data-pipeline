@@ -1,6 +1,6 @@
 # Expansion review and implementation plan (P0–P3)
 
-**Status:** P0 committed and verified on 13 October 2026. P1 is committed and verified against Postgres, the LLM, local API, and browser UI. P2 is implemented and locally verified on `codex/p2-monitoring-sources-examples`; P3 remains planned. Deployment, independently labeled example comparison, and adaptive-threshold calibration remain future gates.
+**Status:** P0, P1, and P2 are committed and independently verified. P3 is implemented and verified locally and against isolated live Postgres/API/UI and database/LLM graph runs on `codex/p3-temporal-json-sources`. Deployment, independently labeled example comparison, and adaptive-threshold calibration remain future gates.
 **Inputs:** the three-direction proposal, `docs/design-p0-value-drift-multi-patch.md`, and the current repository.
 **Decision:** The directions are useful. The P0 implementation follows the corrections below; the later phases retain their proposed order and verification gates.
 
@@ -90,6 +90,15 @@ The current P0 design doc remains a useful starting sketch. Its claims that no f
 
 ### P3 — Temporal monitoring, date parsing, and JSON normalization
 
+**Implementation status (14 October 2026):** Local temporal rules, strict
+declared date parsing, and a named bounded local JSON snapshot are implemented.
+The rule and UTC clock are pinned in checkpoint state. Date parsing uses the
+existing atomic preflight/CAS/rerun path. JSON normalization happens before
+the common CSV pipeline, with normalized bytes and digest persisted for
+restart recovery. The local suite passes 160 tests and the frontend build
+passes. HTTP ingestion is deferred until a complete fetch policy is
+defined; HTTP pagination does not apply to this local JSON scope.
+
 **Outcome:** date range/freshness anomalies alert with a clear reason; supported format changes can be parsed through a constrained mapping operation; local nested JSON records can be normalized for contract validation.
 
 1. **Temporal drift (1C).** Define per-contract rules such as maximum future skew, freshness lag and expected historical window using an explicit timezone and run clock. Profile parsed-date counts, min/max and invalid count. Range/freshness anomalies are alerts, not format patches. For a format-only dataset, add an allowlisted `date_parse` operation with explicit format and locale/timezone, run it before transform, and revalidate. Avoid pandas' implicit ambiguous MM/DD versus DD/MM guesses. Test day9 format change, future-date anomaly, stale data and ambiguous dates separately.
@@ -97,6 +106,8 @@ The current P0 design doc remains a useful starting sketch. Its claims that no f
 3. **Finish product surfaces.** Show alert-only findings distinctly from failed assertions and attempted patches. Let run history, source picker, contract selector, mapping timeline and analytics represent all source types and multiple drift components. Update `README.md`, `ARCHITECTURE.md`, `DASHBOARD.md`, and the eval summary from measured outcomes.
 
 **P3 verification gate:** format repair succeeds only for declared formats; future/stale data alerts without mapping writes; malformed or ambiguous dates escalate; nested JSON flattening rejects collisions and unexpected arrays; CSV and database regressions remain green; API pagination tests detect missing/duplicate records.
+
+**P3 verification (14 October 2026):** The 160-test local suite and frontend build passed. In a fresh isolated Postgres/API scope, the day9 control and named JSON source were clean; future and stale date batches alerted without mapping writes; an ambiguous date escalated without a write; and the declared DMY format healed with one guarded write. The JSON source's 25-row normalized snapshot was restored from persistent bytes with the same SHA-256 after deleting its local cache. A live 1,002-row named Postgres table remained clean after the DMY mapping was saved, proving the mapping also preserves strict ISO batches; a later JSON run was clean. The marked table was removed, and the configured dashboard mapping pointer remained at version 123. Browser checks covered source selection, temporal alert and graph path, date patch, and a fresh JSON run with zero page errors. A final isolated live database/LLM regression passed 11/11 existing fixtures with five unattended heals, one synthetic approval and four correct escalations. An earlier sweep healed the mixed fixture only after its model confidence fell below the threshold and the harness simulated approval; a targeted repeat and the final sweep healed it unattended. No false auto-apply was observed. HTTP ingestion and its pagination gate remain outside this local JSON phase; deployment is a separate release gate.
 
 ## Execution and release gates
 

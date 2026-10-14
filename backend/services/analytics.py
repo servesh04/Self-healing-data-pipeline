@@ -188,7 +188,7 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
         "contract_name": record.get("contract_name", "default"),
         "contract_version": record.get("contract_version"),
         "source_path": ((record.get("source_ref") or {}).get("source_id")
-                        if (record.get("source_ref") or {}).get("kind") == "database_table"
+                        if (record.get("source_ref") or {}).get("kind") in {"database_table", "local_json"}
                         else record["source_path"]),
         "dataset": (record.get("source_ref") or {}).get("source_id") or Path(record["source_path"]).name,
         "status": status,
@@ -199,6 +199,8 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
         "duration_ms": duration_ms,
         "created_at": created_at,
         "history": history,
+        "distribution_alerts": values.get("distribution_alerts") or [],
+        "temporal_alerts": values.get("temporal_alerts") or [],
         # Distinguishes the two ways a run can escalate with empty history:
         # a human rejecting a real proposed patch (reject skips apply_patch
         # /rerun_validate entirely, so no HealAttempt is ever appended) vs

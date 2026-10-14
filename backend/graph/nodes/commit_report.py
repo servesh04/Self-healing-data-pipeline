@@ -4,13 +4,13 @@ after healing, using the real heal_attempts counter.
 
 
 def commit_report(state: dict) -> dict:
-    if state.get("monitor_error"):
-        return {"status": "escalated", "final_message": state["monitor_error"]}
+    if state.get("monitor_error") or state.get("temporal_monitor_error"):
+        return {"status": "escalated", "final_message": state.get("monitor_error") or state["temporal_monitor_error"]}
     healed = state["heal_attempts"] > 0
-    alerts = state.get("distribution_alerts") or []
+    alerts = (state.get("distribution_alerts") or []) + (state.get("temporal_alerts") or [])
     if alerts:
-        columns = ", ".join(sorted({a["column"] for a in alerts}))
-        return {"status": "alert", "final_message": f"distribution alert: {columns}; schema validation passed"}
+        checks = ", ".join(sorted({a.get("check", "distribution") for a in alerts}))
+        return {"status": "alert", "final_message": f"monitor alert: {checks}; schema validation passed"}
     return {
         "status": "healed" if healed else "clean",
         "final_message": (

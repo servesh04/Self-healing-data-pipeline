@@ -1,5 +1,13 @@
 # DASHBOARD.md — Analytics Dashboard Spec
 
+> **Expansion P3 addendum (2026-10-14):** This historical dashboard spec's
+> implementation boundary predates P3. The run detail now separates temporal
+> alerts from schema failures and patches, showing the UTC run clock and
+> versioned rule; the graph canvas includes `monitor_temporal` and
+> `spec_date_parse`. The source picker labels named local JSON snapshots, and
+> the mapping timeline/diff displays `date_parse` operations. The original
+> presentation spec below remains a record of the earlier dashboard phase.
+
 > **For Claude Code:** This is a **presentation-layer change only.** Read this fully before
 > writing code.
 >

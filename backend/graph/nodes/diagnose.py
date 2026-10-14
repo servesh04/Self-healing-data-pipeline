@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from graph.schemas import DiagnoseOutput, normalize_llm_json
 from prompts.prompts import DIAGNOSE_SYSTEM, DIAGNOSE_USER_TEMPLATE, DIAGNOSE_REPAIR_USER_TEMPLATE
 from services.llm import LLMError, call_json
+from graph.nodes.spec_date_parse import spec_date_parse
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ def _candidate_error(candidates: list[dict], findings: list[dict]) -> str | None
         kinds = [i["kind"] for i in findings if i["finding_id"] in c["finding_ids"]]
         acceptable = {"rename": {"missing_column", "unexpected_column"},
                       "type": {"dtype_mismatch"}, "nullability": {"null_violation"},
-                      "value": {"enum_value"}}[c["drift_class"]]
+                      "value": {"enum_value"},
+                      "date_parse": {"null_violation", "dtype_mismatch"}}[c["drift_class"]]
         if set(kinds) - acceptable or (c["drift_class"] == "rename" and
             (kinds.count("missing_column") != 1 or kinds.count("unexpected_column") != 1)):
             return "inadmissible"
@@ -62,6 +64,25 @@ def _parse_response(raw) -> DiagnoseOutput | None:
 
 
 async def diagnose(state: dict) -> dict:
+    findings = state.get("drift_items") or []
+    date_findings = [f for f in findings if f.get("column") == "order_date" and
+                     f.get("kind") in {"null_violation", "dtype_mismatch"}]
+    if date_findings:
+        # A date failure is never handed to the generic null/type LLM path.
+        # The specialist reads the entire immutable source and must prove an
+        # unambiguous declared format before any mapping can be proposed.
+        proposal = await spec_date_parse({**state, "drift_items": date_findings})
+        if not proposal.get("specialist_output", {}).get("date_parse"):
+            return {**_DEFAULT_UNKNOWN, "diagnosis": "date format is malformed, ambiguous, or undeclared"}
+        candidates = [{"drift_class": "date_parse", "finding_ids": [f["finding_id"] for f in date_findings],
+                       "confidence": 0.95}]
+        if len(date_findings) != len(findings):
+            # Mixed date plus unrelated findings need independently complete
+            # diagnosis; fail closed until such a batch is explicitly modeled.
+            return {**_DEFAULT_UNKNOWN, "diagnosis": "mixed date and schema findings need review"}
+        return {**_DEFAULT_UNKNOWN, "drift_class": "date_parse",
+                "diagnosis": "complete unambiguous declared date format", "confidence": 0.95,
+                "candidates": candidates}
     user_prompt = DIAGNOSE_USER_TEMPLATE.format(
         drift_items=json.dumps(state.get("drift_items") or [], indent=2),
         assertion_failures=json.dumps(state.get("assertion_failures") or [], indent=2),
