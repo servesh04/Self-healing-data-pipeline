@@ -55,9 +55,11 @@ class Connection:
         if "pg_advisory_xact_lock" in query:
             return Cursor()
         if query.startswith("insert into external_order_batches"):
-            feed, batch, payload, digest, count = params
+            feed, batch, payload, digest, count, bucket, key, version = params
             self.staged.setdefault((feed, batch), {"payload": payload, "sha256": digest,
-                                                   "row_count": count, "agent_run_id": None})
+                                                   "row_count": count, "agent_run_id": None,
+                                                   "object_bucket": bucket, "object_key": key,
+                                                   "object_version_id": version})
             return Cursor()
         if "from external_order_batches" in query:
             return Cursor(self.staged.get(tuple(params[:2])))

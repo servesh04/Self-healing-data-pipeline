@@ -1,10 +1,17 @@
 # Self-Healing Data Pipeline
 
+> **P6 object feed and orchestration reference:** A separate loader can stage
+> an allowlisted S3-compatible object by exact version ID, with stable batch
+> identity and immutable Postgres provenance. An optional Airflow 3 DAG
+> waits through human approval using a reschedule sensor and publishes only
+> after validated release. See [P6 runbook](docs/p6-object-airflow-orders.md).
+
 > **P5 deployment boundary:** Production auth mode now separates browser,
 > loader, and approver credentials, and production startup requires an
 > owner-run schema migration. The isolated live production-auth gate passed
-> on 25 October 2026; separate Postgres role grants still require an isolated
-> deployment check. See [P5 deployment runbook](docs/p5-deployment-hardening.md).
+> on 25 October 2026. A later isolated Postgres gate also passed under
+> separate restricted API and loader roles. See
+> [P5 deployment runbook](docs/p5-deployment-hardening.md).
 
 > **P4 external integration:** A separate orders
 > loader now stages immutable batches, triggers a feed-scoped agent run, and

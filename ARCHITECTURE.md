@@ -1,5 +1,13 @@
 # Self-Healing Data Pipeline — Architecture
 
+> **P6 external input and orchestration addendum:**
+> `scripts/object_orders_feed.py` fetches only an allowlisted bucket/key and
+> explicit object version, then stages exact bytes under a deterministic
+> batch ID. `airflow_dags/orders_object_feed.py` is an optional separate
+> Airflow 3 reference DAG. It does not change the backend graph or make
+> Airflow a backend dependency. See
+> [docs/p6-object-airflow-orders.md](docs/p6-object-airflow-orders.md).
+
 > **P4 integration addendum (2026-10-25):** `scripts/orders_loader.py` is a
 > separate process. It stages one immutable orders batch, invokes the
 > authenticated `/api/external/orders` bridge, then waits for a terminal

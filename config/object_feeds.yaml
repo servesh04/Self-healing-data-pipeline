@@ -1,0 +1,9 @@
+# Server-side allowlist. The API accepts no object-store URL or bucket.
+# P6_ORDERS_BUCKET is set only on the separate loader/Airflow worker.
+feeds:
+  partner_orders_a:
+    bucket_env: P6_ORDERS_BUCKET
+    key_prefix: incoming/partner_orders_a/
+  partner_orders_b:
+    bucket_env: P6_ORDERS_BUCKET
+    key_prefix: incoming/partner_orders_b/

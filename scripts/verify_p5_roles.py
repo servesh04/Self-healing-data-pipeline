@@ -54,7 +54,8 @@ def verify_role(dsn: str, role: str) -> None:
             for column in ("agent_run_id", "dispatch_lease_until"):
                 if not _has_column(conn, "external_order_batches", column, "UPDATE"):
                     raise AssertionError(f"api cannot update external_order_batches.{column}")
-            for column in ("payload", "sha256", "row_count", "feed_id", "batch_id"):
+            for column in ("payload", "sha256", "row_count", "feed_id", "batch_id",
+                           "object_bucket", "object_key", "object_version_id"):
                 if _has_column(conn, "external_order_batches", column, "UPDATE"):
                     raise AssertionError(f"api can update external_order_batches.{column}")
         can_create = conn.execute("select has_schema_privilege(current_user, 'public', 'CREATE')").fetchone()[0]

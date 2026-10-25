@@ -46,6 +46,12 @@ async def verify_runtime_schema() -> None:
             cur = await conn.execute("select to_regclass(%s) as relation", (f"public.{table}",))
             if (await cur.fetchone())["relation"] is None:
                 raise RuntimeError(f"production schema missing {table}; run migrations as owner")
+        cur = await conn.execute("""select column_name from information_schema.columns
+            where table_schema = 'public' and table_name = 'external_order_batches'
+              and column_name in ('object_bucket', 'object_key', 'object_version_id')""")
+        columns = {row["column_name"] for row in await cur.fetchall()}
+        if columns != {"object_bucket", "object_key", "object_version_id"}:
+            raise RuntimeError("production external object columns missing; run migrations as owner")
 
 
 def _env(pipeline_env: str | None) -> str:

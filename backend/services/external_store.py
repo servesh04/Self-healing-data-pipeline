@@ -23,9 +23,24 @@ async def init_external_tables() -> None:
             sha256 text not null, row_count integer not null, agent_run_id text,
             created_at timestamptz not null default now(),
             dispatch_lease_until timestamptz,
+            object_bucket text, object_key text, object_version_id text,
             primary key (feed_id, batch_id))""")
         await conn.execute("""alter table external_order_batches
             add column if not exists dispatch_lease_until timestamptz""")
+        for column in ("object_bucket", "object_key", "object_version_id"):
+            await conn.execute(f"alter table external_order_batches add column if not exists {column} text")
+        await conn.execute("""do $$ begin
+            if not exists (select 1 from pg_constraint where conname = 'external_order_object_complete'
+                and conrelid = 'external_order_batches'::regclass) then
+                alter table external_order_batches add constraint external_order_object_complete
+                    check ((object_bucket is null and object_key is null and object_version_id is null)
+                        or (object_bucket is not null and object_key is not null
+                            and object_version_id is not null));
+            end if;
+        end $$""")
+        await conn.execute("""create unique index if not exists external_order_object_identity
+            on external_order_batches(feed_id, object_bucket, object_key, object_version_id)
+            where object_version_id is not null""")
         await conn.execute("""create unique index if not exists
             external_order_batches_run_id on external_order_batches(agent_run_id)
             where agent_run_id is not null""")
@@ -37,6 +52,9 @@ async def init_external_tables() -> None:
                    old.payload is distinct from new.payload or
                    old.sha256 is distinct from new.sha256 or
                    old.row_count is distinct from new.row_count or
+                   old.object_bucket is distinct from new.object_bucket or
+                   old.object_key is distinct from new.object_key or
+                   old.object_version_id is distinct from new.object_version_id or
                    (old.agent_run_id is not null and old.agent_run_id is distinct from new.agent_run_id)
                 then raise exception 'external batch is immutable'; end if;
                 return new;
@@ -74,6 +92,7 @@ async def prepare_run(feed_id: str, batch_id: str, proposed_run_id: str,
     async with get_pool().connection() as conn:
         async with conn.transaction():
             cur = await conn.execute("""select sha256, row_count, agent_run_id,
+                object_bucket, object_key, object_version_id,
                 octet_length(payload) as byte_count
                 from external_order_batches where feed_id = %s and batch_id = %s for update""",
                 (feed_id, batch_id))
@@ -104,6 +123,9 @@ async def prepare_run(feed_id: str, batch_id: str, proposed_run_id: str,
                 ref = {"kind": "external_batch", "source_id": f"{feed_id}/{batch_id}",
                        "feed_id": feed_id, "batch_id": batch_id, "sha256": digest,
                        "row_count": row["row_count"]}
+                if row["object_version_id"] is not None:
+                    ref["object"] = {"bucket": row["object_bucket"], "key": row["object_key"],
+                                     "version_id": row["object_version_id"]}
                 await conn.execute("""insert into source_snapshots
                     (run_id, source_id, payload, sha256, row_count, profile_rows)
                     values (%s, %s, %s, %s, %s, %s)""",

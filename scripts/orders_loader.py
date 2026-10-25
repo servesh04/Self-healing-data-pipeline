@@ -127,19 +127,28 @@ def validate_for_publish(payload: bytes, mapping: dict) -> list[tuple]:
     return output
 
 
-def stage(conn, feed_id: str, batch_id: str, payload: bytes) -> dict:
+def stage(conn, feed_id: str, batch_id: str, payload: bytes,
+          *, provenance: dict | None = None) -> dict:
     feed_id, batch_id = _id(feed_id), _id(batch_id)
+    if provenance is not None and (set(provenance) != {"bucket", "key", "version_id"} or
+                                   not all(isinstance(v, str) and v for v in provenance.values())):
+        raise ValueError("complete object provenance is required")
+    identity = (provenance["bucket"], provenance["key"], provenance["version_id"]) if provenance else (None, None, None)
     rows = _rows(payload)
     digest = hashlib.sha256(payload).hexdigest()
     with conn.transaction():
         conn.execute("""insert into external_order_batches
-            (feed_id, batch_id, payload, sha256, row_count) values (%s, %s, %s, %s, %s)
+            (feed_id, batch_id, payload, sha256, row_count,
+             object_bucket, object_key, object_version_id)
+            values (%s, %s, %s, %s, %s, %s, %s, %s)
             on conflict (feed_id, batch_id) do nothing""",
-            (feed_id, batch_id, payload, digest, len(rows)))
-        row = conn.execute("""select sha256, row_count from external_order_batches
+            (feed_id, batch_id, payload, digest, len(rows), *identity))
+        row = conn.execute("""select sha256, row_count, object_bucket, object_key, object_version_id
+            from external_order_batches
             where feed_id = %s and batch_id = %s""", (feed_id, batch_id)).fetchone()
-        if row["sha256"] != digest or row["row_count"] != len(rows):
-            raise ValueError("batch ID already staged with different bytes")
+        if (row["sha256"] != digest or row["row_count"] != len(rows) or
+                tuple(row[name] for name in ("object_bucket", "object_key", "object_version_id")) != identity):
+            raise ValueError("batch ID already staged with different bytes or object identity")
     return {"sha256": digest, "row_count": len(rows)}
 
 
