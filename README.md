@@ -1,5 +1,12 @@
 # Self-Healing Data Pipeline
 
+> **P4 external integration:** A separate orders
+> loader now stages immutable batches, triggers a feed-scoped agent run, and
+> publishes validated rows to distinct Postgres destination tables only
+> after a terminal release. See [P4 loader runbook](docs/p4-external-orders-loader.md).
+> The 174-test local suite and an isolated live Postgres/API/LLM gate passed
+> on 25 October 2026. Existing P0–P3 deployment behavior is unchanged.
+
 > P0 expansion: categorical `N/S/E/W` region repair and atomic combined patches are implemented and verified. The 13 October 2026 live database and LLM evaluation passed 11/11 fixtures; see `docs/eval_summary.md` and `docs/expansion-review-and-implementation-plan.md`. The original phase-by-phase results below predate P0.
 
 > Existing tools — Great Expectations, Monte Carlo, dbt tests — *detect* data drift and alert.

@@ -236,7 +236,7 @@ class SourceUnavailable(RuntimeError):
 async def ensure_source_path(state: dict) -> str:
     ref = state.get("source_ref") or {}
     path = Path(state["source_path"])
-    if ref.get("kind") not in {"database_table", "local_json"}:
+    if ref.get("kind") not in {"database_table", "local_json", "external_batch"}:
         return str(path)
     expected = ref["sha256"]
     if not path.is_file():

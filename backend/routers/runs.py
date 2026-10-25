@@ -240,7 +240,7 @@ def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = N
     return {
         **values,
         "source_id": source_ref.get("source_id") or Path(values.get("source_path") or "").name,
-        "source_path": (source_ref["source_id"] if source_ref.get("kind") in {"database_table", "local_json"}
+        "source_path": (source_ref["source_id"] if source_ref.get("kind") in {"database_table", "local_json", "external_batch"}
                         else values.get("source_path")),
         "run_id": run_id,
         "api_status": api_status,

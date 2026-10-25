@@ -63,7 +63,7 @@ async def apply_patch(state: dict) -> dict:
             run_id=state.get("run_id"),
             pipeline_env=state.get("pipeline_env"), contract_name=contract.name,
             components=state.get("components") or [], contract_version=contract.version,
-            dataset_family=Path(state["source_path"]).stem.split("_")[0],
+            dataset_family=state.get("source_family") or Path(state["source_path"]).stem.split("_")[0],
             decision="human_approved" if state.get("human_decision") == "approve" else "auto_applied",
             attempt_no=state["heal_attempts"] + 1,
             contract=contract,

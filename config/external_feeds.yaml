@@ -1,0 +1,7 @@
+# The bridge accepts these feed IDs only. Each receives a separate mapping
+# namespace derived from PIPELINE_ENV; neither client nor loader picks a scope.
+feeds:
+  partner_orders_a:
+    contract_name: default
+  partner_orders_b:
+    contract_name: default

@@ -1,5 +1,15 @@
 # Self-Healing Data Pipeline — Architecture
 
+> **P4 integration addendum (2026-10-25):** `scripts/orders_loader.py` is a
+> separate process. It stages one immutable orders batch, invokes the
+> authenticated `/api/external/orders` bridge, then waits for a terminal
+> validated release. Feed-specific mapping namespaces prevent an approved
+> patch in one feed from changing another. The loader checks a persisted
+> release authorization and exact versioned mapping, independently validates
+> the complete batch, and transactionally writes `published_orders` plus its
+> audit row. The agent itself has no destination write path. See
+> [docs/p4-external-orders-loader.md](docs/p4-external-orders-loader.md).
+
 > **Expansion P3 addendum (2026-10-14):** The original phase narrative below
 > describes the initial build. The current graph also routes a schema-passing
 > batch through `monitor_distribution → monitor_temporal → commit_report` on

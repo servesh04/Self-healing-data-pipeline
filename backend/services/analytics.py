@@ -188,7 +188,7 @@ async def _summarize_one(record: dict, graph_app) -> dict | None:
         "contract_name": record.get("contract_name", "default"),
         "contract_version": record.get("contract_version"),
         "source_path": ((record.get("source_ref") or {}).get("source_id")
-                        if (record.get("source_ref") or {}).get("kind") in {"database_table", "local_json"}
+                        if (record.get("source_ref") or {}).get("kind") in {"database_table", "local_json", "external_batch"}
                         else record["source_path"]),
         "dataset": (record.get("source_ref") or {}).get("source_id") or Path(record["source_path"]).name,
         "status": status,
