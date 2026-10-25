@@ -7,7 +7,7 @@ and the CORS allow-list. Nothing here knows about pipelines or graphs yet.
 import sys
 from functools import lru_cache
 
-from pydantic import ValidationError
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,11 @@ class Settings(BaseSettings):
 
     # Single shared bearer token guarding every /api/* route.
     shared_token: str
+    # Demo retains the original shared-token API. Production uses separate
+    # credentials for the external loader and human decisions.
+    auth_mode: str = "demo"
+    loader_service_token: str | None = None
+    approver_token: str | None = None
 
     # Comma-separated origins. Kept as a plain string rather than list[str]:
     # pydantic-settings tries to JSON-decode complex types from env vars, so a
@@ -46,6 +51,16 @@ class Settings(BaseSettings):
     # failing to start. Becomes load-bearing once Phase 3's LLM nodes are
     # live in the deployed graph.
     groq_api_key: str | None = None
+
+    @model_validator(mode="after")
+    def validate_auth(self):
+        if self.auth_mode not in {"demo", "production"}:
+            raise ValueError("AUTH_MODE must be demo or production")
+        if self.auth_mode == "production":
+            tokens = (self.shared_token, self.loader_service_token, self.approver_token)
+            if any(not token or len(token) < 24 for token in tokens) or len(set(tokens)) != 3:
+                raise ValueError("production requires three distinct bearer tokens of at least 24 characters")
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

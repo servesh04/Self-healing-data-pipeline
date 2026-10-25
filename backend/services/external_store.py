@@ -163,7 +163,7 @@ async def authorize_release(feed_id: str, batch_id: str, manifest: dict) -> None
                 on conflict (feed_id, batch_id) do nothing""", values)
             cur = await conn.execute("""select sha256, agent_run_id, pipeline_env,
                 mapping_version, mapping_sha256, row_count, contract_version
-                from external_order_releases where feed_id = %s and batch_id = %s for update""",
+                from external_order_releases where feed_id = %s and batch_id = %s""",
                 (feed_id, batch_id))
             row = await cur.fetchone()
             if tuple(row[key] for key in ("sha256", "agent_run_id", "pipeline_env",

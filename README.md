@@ -1,5 +1,11 @@
 # Self-Healing Data Pipeline
 
+> **P5 deployment boundary:** Production auth mode now separates browser,
+> loader, and approver credentials, and production startup requires an
+> owner-run schema migration. The isolated live production-auth gate passed
+> on 25 October 2026; separate Postgres role grants still require an isolated
+> deployment check. See [P5 deployment runbook](docs/p5-deployment-hardening.md).
+
 > **P4 external integration:** A separate orders
 > loader now stages immutable batches, triggers a feed-scoped agent run, and
 > publishes validated rows to distinct Postgres destination tables only

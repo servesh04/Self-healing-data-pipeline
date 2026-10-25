@@ -1,5 +1,15 @@
 # Eval Summary
 
+## P5 production auth gate (25 October 2026)
+
+The isolated `p5-20261025-auth` live gate verified wrong-role HTTP denials,
+human approval, exact batch release, and the external destination. The clean
+feed published 50 rows at mapping version 277; the repaired feed published
+50 rows at version 279; retry added no duplicate rows; the unsafe case
+published none. The second feed's pointer was unchanged. The 184-test local
+suite and frontend build passed. Database role grants were not applied or
+verified live; that deployment gate remains open.
+
 ## P4 external loader gate (25 October 2026)
 
 The local P4 tests cover initial contract failure, human approval in the

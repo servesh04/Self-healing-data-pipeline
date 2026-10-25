@@ -68,17 +68,22 @@ async def lifespan(app: FastAPI):
 
     await db.open_pool(settings.database_url)
     try:
-        await db.init_schema()
-        await store.init_mapping_table()
-        await store.init_runs_table()
-        await store.init_component_tables()
-        await external_store.init_external_tables()
-        await checkpointer.setup_checkpointer()
+        if settings.auth_mode == "production":
+            await store.verify_runtime_schema()
+        else:
+            await db.init_schema()
+            await store.init_mapping_table()
+            await store.init_runs_table()
+            await store.init_component_tables()
+            await external_store.init_external_tables()
+            await checkpointer.setup_checkpointer()
     except Exception:
         # A cold Neon compute can miss the first statement. Do not crash the
         # app: /health must stay green so the platform does not kill the
         # instance, and /api/ping reports the real error on demand.
         log.exception("startup: schema init failed (will retry on first /api/ping)")
+        if settings.auth_mode == "production":
+            raise
 
     # Compiled once per process and reused across every request — build_graph
     # itself is cheap, but the checkpointer and node wiring have no reason to
@@ -161,13 +166,17 @@ async def ping(settings: Settings = Depends(get_settings)) -> dict:
     db_info: dict = {}
     db_error: str | None = None
     try:
-        await db.init_schema()  # idempotent; covers a failed cold start above
-        await store.init_mapping_table()
-        await store.init_runs_table()
-        await store.init_component_tables()
-        await external_store.init_external_tables()
-        await checkpointer.setup_checkpointer()
-        db_info = await db.write_probe("api-ping", settings.app_env)
+        if settings.auth_mode == "production":
+            await store.verify_runtime_schema()
+            db_info = {"schema_verified": True}
+        else:
+            await db.init_schema()  # idempotent; covers a failed cold start above
+            await store.init_mapping_table()
+            await store.init_runs_table()
+            await store.init_component_tables()
+            await external_store.init_external_tables()
+            await checkpointer.setup_checkpointer()
+            db_info = await db.write_probe("api-ping", settings.app_env)
         db_info["server_version"] = await db.server_version()
     except Exception as exc:
         db_error = f"{type(exc).__name__}: {exc}"

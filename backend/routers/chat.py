@@ -111,6 +111,11 @@ async def _ask(system_prompt: str, context: dict, messages: list[ChatMessage]) -
 async def chat_about_run(
     run_id: str, body: ChatRequest, graph_app=Depends(_graph_app)
 ) -> dict:
+    from config import get_settings
+    from services import store
+    from routers.runs import _external_record
+    if get_settings().auth_mode == "production" and _external_record(await store.get_run_record(run_id)):
+        raise HTTPException(status_code=403, detail="external run chat is unavailable to browser credential")
     if not body.messages or body.messages[-1].role != "user":
         raise HTTPException(status_code=400, detail="last message must be from the user")
 

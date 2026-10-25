@@ -10,13 +10,15 @@ per-attempt history.
 from fastapi import APIRouter, Depends, Query, Request, HTTPException
 from pydantic import BaseModel
 
-from auth import require_token
+from auth import require_token, require_browser_scope
 from services.analytics import collect_run_summaries
 from services import store
 from services.calibration import aggregate_component_events
 from pipeline.contract import get_registry
+from config import get_settings
 
-router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[Depends(require_token)])
+router = APIRouter(prefix="/api/analytics", tags=["analytics"],
+                   dependencies=[Depends(require_token), Depends(require_browser_scope)])
 
 DRIFT_CLASSES = ["rename", "type", "nullability", "value", "date_parse", "unknown"]
 SPECIALISTS = ["spec_rename", "spec_type", "spec_nullability", "spec_value", "spec_date_parse"]
@@ -47,6 +49,13 @@ async def component_metrics(pipeline_env: str | None = Query(None),
 
 @router.post("/components/{event_id}/label")
 async def add_component_label(event_id: int, body: ComponentLabel) -> dict:
+    if get_settings().auth_mode == "production":
+        scope = await store.component_event_scope(event_id)
+        if scope is None:
+            raise HTTPException(status_code=404, detail="proposal component not found")
+        if (scope["pipeline_env"] != get_settings().pipeline_env or
+                (scope.get("source_ref") or {}).get("kind") == "external_batch"):
+            raise HTTPException(status_code=403, detail="browser cannot label external components")
     if not body.labeled_by.strip():
         raise HTTPException(status_code=422, detail="labeled_by is required")
     try:

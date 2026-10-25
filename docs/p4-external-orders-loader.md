@@ -22,9 +22,10 @@ Set these only in the loader process:
 |---|---|
 | `P4_LOADER_DATABASE_URL` | Postgres connection for staging and destination writes |
 | `P4_AGENT_API_URL` | Base URL of the agent API |
-| `P4_AGENT_TOKEN` | Bearer token for the agent's existing authenticated API |
+| `P4_AGENT_TOKEN` | Demo-only shared bearer token; production uses `P5_LOADER_SERVICE_TOKEN` |
 
-Use a loader DB role with `INSERT`/`SELECT` on `external_order_batches`,
+In production, use the reviewed P5 grants rather than the earlier broad
+role sketch below; see `docs/p5-deployment-hardening.md`. Use a loader DB role with `INSERT`/`SELECT` on `external_order_batches`,
 `INSERT`/`SELECT` on `published_order_batches` and `published_orders`, and
 read-only access to `external_order_releases`, `mapping_state` and
 `run_records`. The API DB role creates the idempotent schema migration and
@@ -115,7 +116,6 @@ edits stop publication until a new parity review updates that pin. Approval
 correctness remains a human decision. The bridge
 does not poll or retry on its own; the loader process owns that workflow.
 The isolated live Postgres/API/LLM gate passed on 25 October 2026; see
-`docs/eval_summary.md`. A database role-grant review remains a release gate
-before deploying the loader with separate service credentials. The current
-shared bearer token is also embedded in the demo browser client; production
-use requires separate service credentials and user authentication.
+`docs/eval_summary.md`. P5 production auth and role deployment are described
+in `docs/p5-deployment-hardening.md`; the existing demo credentials remain
+available only with `AUTH_MODE=demo`.

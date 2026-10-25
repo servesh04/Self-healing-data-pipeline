@@ -34,6 +34,20 @@ from pipeline.contract import Contract, get_registry
 SEED_PATH = Path(__file__).resolve().parents[2] / "config" / "mapping.yaml"
 
 
+async def verify_runtime_schema() -> None:
+    """Production startup is read-only; migrations run under an owner role."""
+    required = ("mapping_state", "mapping_current", "run_records", "source_snapshots",
+                "component_events", "component_labels", "approval_decisions",
+                "external_order_batches", "external_order_releases",
+                "published_order_batches", "published_orders",
+                "checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations")
+    async with get_pool().connection() as conn:
+        for table in required:
+            cur = await conn.execute("select to_regclass(%s) as relation", (f"public.{table}",))
+            if (await cur.fetchone())["relation"] is None:
+                raise RuntimeError(f"production schema missing {table}; run migrations as owner")
+
+
 def _env(pipeline_env: str | None) -> str:
     return pipeline_env if pipeline_env is not None else get_settings().pipeline_env
 
@@ -578,3 +592,11 @@ async def label_component(event_id: int, correct: bool, labeled_by: str,
             raise ValueError("proposal event not found")
         await conn.execute("insert into component_labels (event_id, correct, labeled_by, note) values (%s, %s, %s, %s)",
                            (event_id, correct, labeled_by, note))
+
+
+async def component_event_scope(event_id: int) -> dict | None:
+    async with get_pool().connection() as conn:
+        cur = await conn.execute("""select e.pipeline_env, r.source_ref
+            from component_events e left join run_records r on r.run_id = e.run_id
+            where e.id = %s and e.event_type = 'proposal'""", (event_id,))
+        return await cur.fetchone()

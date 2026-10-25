@@ -52,6 +52,8 @@ class Connection:
 
     def execute(self, query, params=()):
         query = " ".join(query.split()).lower()
+        if "pg_advisory_xact_lock" in query:
+            return Cursor()
         if query.startswith("insert into external_order_batches"):
             feed, batch, payload, digest, count = params
             self.staged.setdefault((feed, batch), {"payload": payload, "sha256": digest,
@@ -238,7 +240,7 @@ async def test_bridge_trigger_is_idempotent_and_feed_scoped(monkeypatch, tmp_pat
         dispatch_calls.append(args)
         return len(dispatch_calls) == 1
     monkeypatch.setattr(external.external_store, "claim_dispatch", dispatch)
-    monkeypatch.setattr(external, "get_settings", lambda: SimpleNamespace(pipeline_env="p4-test"))
+    monkeypatch.setattr(external, "get_settings", lambda: SimpleNamespace(pipeline_env="p4-test", auth_mode="demo"))
     monkeypatch.setattr(external, "SNAPSHOT_DIR", tmp_path)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(graph_app=Graph())))
     background = BackgroundTasks()

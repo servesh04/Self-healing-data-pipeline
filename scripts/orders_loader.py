@@ -150,8 +150,12 @@ def publish(conn, feed_id: str, batch_id: str, manifest: dict) -> dict:
             manifest.get("contract_version") != SUPPORTED_CONTRACT_VERSION):
         raise ValueError("release manifest does not match batch")
     with conn.transaction():
+        # Serializes retries without UPDATE privilege on immutable source or
+        # release tables. Only the separate loader DB role holds the lock.
+        conn.execute("select pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                     (f"orders-publish:{feed_id}:{batch_id}",))
         staged = conn.execute("""select payload, sha256, row_count, agent_run_id
-            from external_order_batches where feed_id = %s and batch_id = %s for update""",
+            from external_order_batches where feed_id = %s and batch_id = %s""",
             (feed_id, batch_id)).fetchone()
         if staged is None:
             raise ValueError("staged batch is missing")
@@ -172,7 +176,7 @@ def publish(conn, feed_id: str, batch_id: str, manifest: dict) -> dict:
             raise ValueError("release scope does not match agent run")
         authorization = conn.execute("""select sha256, agent_run_id, pipeline_env,
             mapping_version, mapping_sha256, row_count, contract_version
-            from external_order_releases where feed_id = %s and batch_id = %s for update""",
+            from external_order_releases where feed_id = %s and batch_id = %s""",
             (feed_id, batch_id)).fetchone()
         mapping_hash = hashlib.sha256(json.dumps(manifest["mapping"], sort_keys=True,
                                                  separators=(",", ":")).encode()).hexdigest()
@@ -197,7 +201,7 @@ def publish(conn, feed_id: str, batch_id: str, manifest: dict) -> dict:
         if len(rows) != staged["row_count"]:
             raise ValueError("validated row count differs from stage")
         existing = conn.execute("""select sha256, agent_run_id, mapping_version, row_count
-            from published_order_batches where feed_id = %s and batch_id = %s for update""",
+            from published_order_batches where feed_id = %s and batch_id = %s""",
             (feed_id, batch_id)).fetchone()
         if existing:
             if (existing["sha256"], existing["agent_run_id"], existing["mapping_version"], existing["row_count"]) != (
@@ -231,9 +235,26 @@ def main() -> int:
     _id(args.feed_id); _id(args.batch_id)
     if args.action == "submit" and not args.csv_path:
         parser.error("submit requires csv_path")
-    dsn = os.environ["P4_LOADER_DATABASE_URL"]
     api = os.environ["P4_AGENT_API_URL"].rstrip("/")
-    token = os.environ["P4_AGENT_TOKEN"]
+    production = os.environ.get("AUTH_MODE", "demo") == "production"
+    if args.action in {"approve", "reject"}:
+        token = os.environ.get("P5_APPROVER_TOKEN")
+        if not production:
+            token = token or os.environ.get("P4_AGENT_TOKEN")
+        if not token:
+            raise ValueError("P5_APPROVER_TOKEN is required for human decisions")
+        with httpx.Client(base_url=api, headers={"Authorization": f"Bearer {token}"}, timeout=20) as client:
+            decision = client.post(f"/api/external/orders/{args.feed_id}/{args.batch_id}/{args.action}",
+                                   json={"note": args.note})
+            decision.raise_for_status()
+            print(f"{args.action} recorded for run {decision.json()['run_id']}; invoke retry after it completes")
+        return 0
+    dsn = os.environ["P4_LOADER_DATABASE_URL"]
+    token = os.environ.get("P5_LOADER_SERVICE_TOKEN")
+    if not production:
+        token = token or os.environ.get("P4_AGENT_TOKEN")
+    if not token:
+        raise ValueError("P5_LOADER_SERVICE_TOKEN is required for the loader")
     with psycopg.connect(dsn, row_factory=psycopg.rows.dict_row) as conn:
         if args.action == "submit":
             staged = stage(conn, args.feed_id, args.batch_id, Path(args.csv_path).read_bytes())
@@ -243,13 +264,8 @@ def main() -> int:
             response = client.post(f"/api/external/orders/{args.feed_id}/{args.batch_id}/trigger")
             response.raise_for_status()
             run_id = response.json()["run_id"]
-            if args.action in {"approve", "reject"}:
-                decision = client.post(f"/api/runs/{run_id}/{args.action}", json={"note": args.note})
-                decision.raise_for_status()
-                print(f"{args.action} recorded for run {run_id}; invoke retry after it completes")
-                return 0
             for _ in range(120):
-                detail = client.get(f"/api/runs/{run_id}")
+                detail = client.get(f"/api/external/orders/{args.feed_id}/{args.batch_id}/status")
                 # The trigger registers the run before its background graph
                 # writes the first checkpoint. A short-lived 404 is expected.
                 if detail.status_code == 404:

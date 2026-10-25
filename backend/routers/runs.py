@@ -29,7 +29,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 import psycopg
 
-from auth import require_token
+from auth import require_token, decision_role
 from graph.state import RECURSION_LIMIT
 from services import checkpointer, store
 from services.analytics import collect_run_summaries, invalidate_run_summaries
@@ -64,13 +64,17 @@ def _resolve_source_path(source_path: str) -> str:
 async def _ensure_checkpointer_ready() -> None:
     global _schema_ready
     try:
-        await checkpointer.setup_checkpointer()
+        if get_settings().auth_mode != "production":
+            await checkpointer.setup_checkpointer()
         if not _schema_ready:
             async with _schema_lock:
                 if not _schema_ready:
-                    await store.init_mapping_table()
-                    await store.init_runs_table()
-                    await store.init_component_tables()
+                    if get_settings().auth_mode == "production":
+                        await store.verify_runtime_schema()
+                    else:
+                        await store.init_mapping_table()
+                        await store.init_runs_table()
+                        await store.init_component_tables()
                     _schema_ready = True
     except Exception:
         log.exception("runs: startup retry failed")
@@ -80,7 +84,7 @@ async def _ensure_checkpointer_ready() -> None:
 router = APIRouter(
     prefix="/api/runs",
     tags=["runs"],
-    dependencies=[Depends(require_token), Depends(_ensure_checkpointer_ready)],
+    dependencies=[Depends(_ensure_checkpointer_ready)],
 )
 
 
@@ -251,7 +255,7 @@ def _serialize_state(run_id: str, snapshot, mapping_audit: list[dict] | None = N
     }
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_token)])
 async def trigger_run(
     body: TriggerRunRequest,
     background: BackgroundTasks,
@@ -284,7 +288,7 @@ async def trigger_run(
     return {"run_id": run_id}
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require_token)])
 async def list_runs(
     graph_app=Depends(_graph_app),
     limit: int = Query(50, ge=1, le=500),
@@ -339,12 +343,21 @@ async def list_runs(
     }
 
 
+def _external_record(record: dict | None) -> bool:
+    ref = (record or {}).get("source_ref") or {}
+    feed = ref.get("feed_id")
+    return bool(ref.get("kind") == "external_batch" and isinstance(feed, str) and
+                record["pipeline_env"].endswith(f":external:{feed}"))
+
+
 @router.get("/{run_id}")
-async def get_run(run_id: str, graph_app=Depends(_graph_app)) -> dict:
+async def get_run(run_id: str, graph_app=Depends(_graph_app), role: str = Depends(decision_role)) -> dict:
     snapshot = await graph_app.aget_state({"configurable": {"thread_id": run_id}})
     if not snapshot.values:
         raise HTTPException(status_code=404, detail="run not found")
     record = await store.get_run_record(run_id)
+    if get_settings().auth_mode == "production" and (_external_record(record) != (role == "approver")):
+        raise HTTPException(status_code=403, detail="run scope is not available to this credential")
     # Checkpoints may predate run_records. New runs use the stored scope;
     # historical checkpoint-only runs retain their default-scope audit.
     values = snapshot.values
@@ -357,9 +370,12 @@ async def get_run(run_id: str, graph_app=Depends(_graph_app)) -> dict:
 
 
 @router.get("/{run_id}/approvals")
-async def get_run_approvals(run_id: str) -> dict:
-    if await store.get_run_record(run_id) is None:
+async def get_run_approvals(run_id: str, role: str = Depends(decision_role)) -> dict:
+    record = await store.get_run_record(run_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="run not found")
+    if get_settings().auth_mode == "production" and (_external_record(record) != (role == "approver")):
+        raise HTTPException(status_code=403, detail="run scope is not available to this credential")
     return {"approvals": await store.approval_history(run_id)}
 
 
@@ -414,7 +430,13 @@ async def approve_run(
     background: BackgroundTasks,
     body: ApprovalRequest | None = None,
     graph_app=Depends(_graph_app),
+    role: str = Depends(decision_role),
 ) -> dict:
+    record = await store.get_run_record(run_id)
+    if get_settings().auth_mode == "production" and _external_record(record) and role != "approver":
+        raise HTTPException(status_code=403, detail="external run requires approver credential")
+    if get_settings().auth_mode == "production" and not _external_record(record) and role != "browser":
+        raise HTTPException(status_code=403, detail="approver credential is limited to external runs")
     note = body.note if body else None
     return await _resume(run_id, "approve", note, background, graph_app)
 
@@ -425,6 +447,12 @@ async def reject_run(
     background: BackgroundTasks,
     body: ApprovalRequest | None = None,
     graph_app=Depends(_graph_app),
+    role: str = Depends(decision_role),
 ) -> dict:
+    record = await store.get_run_record(run_id)
+    if get_settings().auth_mode == "production" and _external_record(record) and role != "approver":
+        raise HTTPException(status_code=403, detail="external run requires approver credential")
+    if get_settings().auth_mode == "production" and not _external_record(record) and role != "browser":
+        raise HTTPException(status_code=403, detail="approver credential is limited to external runs")
     note = body.note if body else None
     return await _resume(run_id, "reject", note, background, graph_app)
