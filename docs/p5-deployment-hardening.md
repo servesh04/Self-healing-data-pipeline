@@ -72,6 +72,17 @@ were denied. A clean control published 50 rows at mapping version 277; a
 human-approved rename published 50 rows at version 279; an exact retry
 inserted no duplicates; the unsafe case published zero rows. The other feed's
 mapping pointer stayed at version 277. Test batch and destination rows remain
-for audit. This gate used the existing database owner connection, so it does
-not establish that the proposed `p5_api` and `p5_loader` grants work. The
-isolated role-grant gate in steps 2–5 remains to be run before deployment.
+for audit. This first gate used the existing database owner connection.
+
+A subsequent isolated gate created a temporary database, migrated it as owner,
+applied `scripts/p5_roles.sql`, and passed `scripts/verify_p5_roles.py` under
+separate `p5_api` and `p5_loader` logins. The live API/LLM batch gate then ran
+with those restricted roles: 50 clean rows, 50 repaired rows, no duplicate
+rows on retry, and zero published rows for the unsafe case. Wrong-role HTTP
+calls were denied. The temporary database and both test roles were removed.
+The first isolated attempt was interrupted by a transient database DNS
+failure; a fresh rerun passed. The reusable gate is
+`python scripts/verify_p5_isolated.py`; it requires an owner `DATABASE_URL`
+with CREATEDB and CREATEROLE, `SHARED_TOKEN`, and `GROQ_API_KEY`, and refuses
+to reuse pre-existing `p5_api` or `p5_loader` roles. Production deployment
+and network boundaries remain separate decisions.

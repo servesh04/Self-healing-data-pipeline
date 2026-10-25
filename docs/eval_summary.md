@@ -7,8 +7,12 @@ human approval, exact batch release, and the external destination. The clean
 feed published 50 rows at mapping version 277; the repaired feed published
 50 rows at version 279; retry added no duplicate rows; the unsafe case
 published none. The second feed's pointer was unchanged. The 184-test local
-suite and frontend build passed. Database role grants were not applied or
-verified live; that deployment gate remains open.
+suite and frontend build passed. A subsequent isolated Postgres gate applied
+the grants in a temporary database and ran the full live batch flow under
+separate restricted API and loader roles. It passed with 50 clean and 50
+repaired rows, no retry duplicates, and no unsafe publish; the temporary
+database and roles were removed. The first attempt hit a transient database
+DNS failure; a fresh rerun passed.
 
 ## P4 external loader gate (25 October 2026)
 
