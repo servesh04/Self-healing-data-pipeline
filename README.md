@@ -1,5 +1,10 @@
 # Self-Healing Data Pipeline
 
+> **P7 event intake reference:** A separate SQS bridge validates a versioned
+> S3 Object Created EventBridge event and idempotently triggers the existing
+> Airflow orders DAG. Operators can replay an exact object version. See
+> [P7 runbook](docs/p7-event-operations.md).
+
 > **P6 object feed and orchestration reference:** A separate loader can stage
 > an allowlisted S3-compatible object by exact version ID, with stable batch
 > identity and immutable Postgres provenance. An optional Airflow 3 DAG
