@@ -47,6 +47,10 @@ export default function TopBar({ onOpenNav }) {
       .catch(() => setEnvError(true))
     fetchContracts()
     fetchSources()
+
+    const onContractsUpdated = () => fetchContracts()
+    window.addEventListener('shdp:contracts-updated', onContractsUpdated)
+    return () => window.removeEventListener('shdp:contracts-updated', onContractsUpdated)
   }, [fetchContracts, fetchSources])
 
   const [title, subtitle] = runMatch
