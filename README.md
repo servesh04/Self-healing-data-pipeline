@@ -1,904 +1,172 @@
 # Self-Healing Data Pipeline
 
-> **P7 event intake reference:** A separate SQS bridge validates a versioned
-> S3 Object Created EventBridge event and idempotently triggers the existing
-> Airflow orders DAG. Operators can replay an exact object version. See
-> [P7 runbook](docs/p7-event-operations.md).
-
-> **P6 object feed and orchestration reference:** A separate loader can stage
-> an allowlisted S3-compatible object by exact version ID, with stable batch
-> identity and immutable Postgres provenance. An optional Airflow 3 DAG
-> waits through human approval using a reschedule sensor and publishes only
-> after validated release. See [P6 runbook](docs/p6-object-airflow-orders.md).
-
-> **P5 deployment boundary:** Production auth mode now separates browser,
-> loader, and approver credentials, and production startup requires an
-> owner-run schema migration. The isolated live production-auth gate passed
-> on 25 October 2026. A later isolated Postgres gate also passed under
-> separate restricted API and loader roles. See
-> [P5 deployment runbook](docs/p5-deployment-hardening.md).
-
-> **P4 external integration:** A separate orders
-> loader now stages immutable batches, triggers a feed-scoped agent run, and
-> publishes validated rows to distinct Postgres destination tables only
-> after a terminal release. See [P4 loader runbook](docs/p4-external-orders-loader.md).
-> The 174-test local suite and an isolated live Postgres/API/LLM gate passed
-> on 25 October 2026. Existing P0–P3 deployment behavior is unchanged.
-
-> P0 expansion: categorical `N/S/E/W` region repair and atomic combined patches are implemented and verified. The 13 October 2026 live database and LLM evaluation passed 11/11 fixtures; see `docs/eval_summary.md` and `docs/expansion-review-and-implementation-plan.md`. The original phase-by-phase results below predate P0.
-
-> Existing tools — Great Expectations, Monte Carlo, dbt tests — *detect* data drift and alert.
-> A human still writes the patch. This agent closes the remaining loop: it diagnoses the drift,
-> proposes a remediation patch, and escalates to a human when confidence is low rather than
-> silently mutating production logic. We measure how many injected faults it heals unaided,
-> how many it correctly escalates, and how many it misses.
-
-A LangGraph agent that repairs a data pipeline when upstream data drifts. See
-[ARCHITECTURE.md](ARCHITECTURE.md) for the full design — it is the source of truth for this build.
+An autonomous, resilient data ingestion platform that detects, diagnoses, and remediates upstream schema drift in real time using **LangGraph**, **FastAPI**, **Neon Serverless Postgres**, and **React**.
 
 ---
 
-## Expansion P3 status (verified locally and against live services)
+## The Problem
 
-P3 adds an alert-only temporal monitor after distribution monitoring on both
-clean and healed graph paths. `config/temporal_rules.yaml` declares a versioned
-UTC rule for the `default/orders_current` family: future skew, freshness lag,
-and historical window. The API pins the rule, its SHA-256 digest, and the UTC
-run clock before starting the graph, so approval or restart does not move the
-comparison time. The run detail shows the parsed/invalid count, observed date
-range, rule version, and individual alert reasons. Monitoring never writes a
-mapping; a configured monitor error escalates.
+In modern data architectures, upstream data contracts break unexpectedly:
+* A vendor renames a column (`customer_id` → `acct_ref` or `total_amount` → `amount`).
+* Numeric values arrive formatted as strings with commas or currency symbols.
+* Unexpected nulls appear in non-nullable fields.
 
-The pipeline parses ISO `%Y-%m-%d` dates by default. `date_parse` is a new
-allowlisted mapping section, currently limited to `dmy_slash_utc` for
-`order_date` (`%d/%m/%Y`, day-first, UTC). The deterministic specialist reads
-the complete immutable source and proposes this operation only when every
-date is valid and unambiguous. A persisted date mapping also accepts the
-strict default ISO format, including batches mixing those two explicit
-formats. Ambiguous dates such as `04/05/2026`, malformed dates, and
-unsupported operations escalate. The proposal still
-passes preflight, compare-and-swap persistence, and full rerun validation.
+Traditional ETL pipelines fail immediately, trigger urgent off-hours alerts, and require manual data engineering intervention to patch code and backfill tables.
 
-`GET /api/config/sources` now also lists the named local JSON source
-`orders_json_demo`. `config/sources.yaml` fixes its file, records path
-(`payload.orders`), depth, separator, row and byte caps. Nested record objects
-flatten deterministically, nulls stay null, and arrays, key collisions, and
-over-depth records fail closed. The normalized CSV bytes and digest are stored
-in `source_snapshots`, so resumed runs use the same data after restart. The API
-accepts only the source ID, never a client path or JSON normalization rule.
-No HTTP source fetcher is included: its authentication, URL allowlist,
-pagination, retry, rate, payload, and snapshot policy are not specified, so
-HTTP pagination is not applicable to this local JSON release.
-
-The local P3 suite passed 160 tests and the frontend production build passed.
-In an isolated live Postgres/API scope, the day9 control was clean; future and
-stale batches alerted without mapping writes; an ambiguous date escalated
-without a write; the declared DMY format healed with one guarded mapping
-write; and named JSON normalized and validated cleanly. Restoring its deleted
-local cache from `source_snapshots` reproduced the saved digest. After the DMY
-mapping was saved, a 1,002-row ISO dated named Postgres table and a new JSON
-run both stayed clean. The marked temporary table was removed and the
-configured dashboard mapping pointer remained at version 123. Browser checks
-covered the source picker, temporal graph path, alert detail, date patch, and
-JSON run with zero page errors. The final isolated database/LLM graph sweep
-passed 11/11 existing fixtures. One earlier sweep required synthetic review
-for the mixed fixture after the model assigned lower confidence; an isolated
-repeat and the final full sweep healed it unattended. No false auto-apply was
-observed. Deployment remains a separate release gate.
+**Self-Healing Data Pipeline** turns ingestion into an adaptive state machine: it diagnoses the drift using specialized LLM agents, synthesizes bounded declarative schema patches, verifies fixes through self-healing cycles, pauses for human review on ambiguous drift, and commits all changes with full database-level transactional safety.
 
 ---
 
-## Expansion P1 status (verified locally and against live services)
+## Key Capabilities
 
-Named contracts now live in `config/contracts/`; `default.yaml` is the canonical
-copy of the former `config/contract.yaml`, which remains for older tooling.
-`compact.yaml` and `data/sources/compact_clean.csv` exercise a different
-column set. `POST /api/runs` accepts `contract_name` (default `default`) and a
-bundled CSV filename. The dashboard contract selector filters runs, mapping
-history, analytics and global chat to that contract. Each run checkpoints the
-contract spec and SHA-256 version, so resume uses the original contract even
-if a registry file changes later.
-
-The idempotent startup migration adds `contract_name='default'` to legacy
-mapping and run rows, backfills mapping parent IDs, and creates
-`mapping_current` pointers per `(pipeline_env, contract_name)`. Writes lock
-and compare that pointer inside one transaction. A rerun that introduces a
-new stable `(column, check)` failure or increases its count appends a rollback
-version restoring the exact parent, provided the failed patch remains current;
-otherwise it escalates for reconciliation. Proposal, decision and outcome
-events are separate from independently supplied correctness labels. The
-calibration panel reports denominators and a Wilson 95% interval only for
-labeled correctness; the confidence threshold remains 0.75.
-
-The migration was checked with local mocks and then applied twice to the
-configured Postgres database after a backup. All 172 legacy mapping rows
-and 47 run records kept their original columns byte-equivalent; 50 legacy
-scopes retained their previous latest mapping IDs. A fresh isolated scope
-passed concurrent CAS, contract isolation and rollback checks. The 11-fixture
-full graph evaluation passed, and local HTTP checks confirmed clean default
-and compact runs plus day6 approval across a real backend process restart.
-The browser check confirmed contract filtering, mapping history and the
-resumed run detail without page errors. The final Python suite passed 137
-tests and the frontend build passed. The original configured mapping pointer
-remained at version 123 after the isolated checks.
-Deployment of the backend remains a separate release gate. Existing
-`config/contract.yaml` edits are no longer read by the registry; update
-`config/contracts/default.yaml` for future runs.
-
-For an isolated integration check after schema migration, run
-`scripts/verify_p1_store.py` against a configured Postgres connection. It
-creates a unique `p1-verify-*` environment, tests concurrent writes and
-rollback, and keeps its audit versions. For HTTP verification, start a local
-backend with a fresh `PIPELINE_ENV=p1-api-*`, then run
-`scripts/verify_p1_api.py --expected-env <that-env> smoke`. The script's
-`start-resume` and `finish-resume --run-id` modes bracket a server restart to
-check checkpoint recovery. The API harness checks `/api/runtime` before any
-mapping request so it cannot accidentally run against a different scope.
+* **Autonomous Self-Healing:** Resolves column renames, type casting mismatches, null policies, and date formats without modifying backend code or restarting services.
+* **Declarative Safety Guardrails:** Healing agents output strictly validated Pydantic configuration schemas (`rename`, `casts`, `fill_na`, `dates`), **never arbitrary Python code or raw SQL**.
+* **Durable Human-in-the-Loop (HITL):** When patch confidence is below threshold ($< 0.80$), LangGraph halts at an `interrupt()` node, durably serializing state to Postgres until an operator approves or rejects it in the UI.
+* **Compare-And-Swap (CAS) Concurrency & Rollbacks:** Mapping updates use PostgreSQL advisory transaction locks (`pg_advisory_xact_lock`) with parent version checks. Conflicting or failed downstream runs trigger automated rollbacks to the prior state.
+* **Dynamic Data Contract Registry:** Operators can upload, validate, and version YAML/JSON data contracts at runtime without modifying the underlying repository.
+* **Real-Time Observability:** Interactive dashboard displays graph execution timelines, schema diffs, patch comparisons, confidence distributions, and specialist performance.
 
 ---
 
-## Expansion P2 status (implemented and verified locally)
+## Architecture Overview
 
-The graph now checks a reviewed distribution baseline after both clean schema
-validation and a successful repair. `default/orders` baseline version
-`orders-revenue-v1` stores the day1 sample size, missingness, quartiles, IQR,
-and collection window. A run checkpoints the baseline spec and SHA-256 digest
-before execution. A median more than three baseline IQRs away alerts without
-writing a mapping. The monitor requires 30 valid rows and at most 20% missing
-numeric values; insufficient samples and missing baselines are shown as skipped.
-Day8's 10× revenue fixture alerts, a 5% variance control stays clean, and a
-25-row shifted fixture passes the schema contract but skips monitoring. These
-synthetic controls establish a provisional threshold; use held-out real batches
-before treating it as a production statistical policy. Alerts never update the
-baseline.
-
-`POST /api/runs` accepts a `source_id` from `GET /api/config/sources`; the old
-`source_path` field still accepts a bundled CSV ID for older clients. The
-allowlist in `config/sources.yaml` defines `orders_table_demo`, with its table,
-schema, deterministic ordering key, row cap (5,000), byte cap (10 MiB), and
-10-second SQL statement timeout. Set `P2_SOURCE_DATABASE_URL` in the backend
-process environment to expose it. Give that connection a separate role with
-SELECT only on the named table. The API accepts no SQL, table name, filesystem
-path, or connection string from clients. The table is read in a read-only,
-repeatable-read transaction ordered by a unique non-null key. Up to 1,000
-ordered rows supply the source profile, while Pandera validates the complete
-captured batch. Over-cap tables fail before a run is registered. Snapshot bytes
-and their digest are stored in `source_snapshots`; a missing local cache is
-restored after process or host restart, and a changed cache fails closed. The
-application's regular database connection stores snapshots; it should retain
-them through the run's audit retention period.
-
-Human approval decisions are stored once per run attempt with the proposal
-hash, note, contract, shape of findings, and eventual validation outcome.
-Concurrent same-decision requests dispatch one resume; conflicts return 409.
-A per-run database advisory lock serializes an approval queued while the
-initial graph execution is still finishing its interrupt. Expired dispatch
-claims can be retried after a process crash only when that execution lock is
-free. The run detail shows approval history. Labeled examples require a
-same-environment, same-contract, same-specialist approved proposal with an
-independent positive correctness label and passing validation. Retrieval ranks
-matching check shapes deterministically, caps context, and excludes notes,
-sample values and patch operations. Prompt inclusion defaults off; set
-`ENABLE_APPROVAL_EXAMPLES=1` only after independent labels and a held-out
-comparison with `eval/compare_approval_examples.py`. The comparison script
-never writes a mapping or enables the feature itself.
-
-The 147-test local suite, frontend production build, and isolated 11/11 live
-database/LLM full-graph regression passed. An isolated live
-Postgres/API run confirmed the shifted day8 alert with no mapping write, clean
-normal and low-sample controls, a clean 1,002-row named table snapshot, an
-invalid value at row 1,002 detected by full validation, and a 5,001-row table
-rejected at the 5,000-row cap. Deleting the local snapshot cache and restoring
-from `source_snapshots` reproduced its digest. An approval paused, survived a
-backend restart, resumed to healed, and produced one durable decision; a repeat
-approval was idempotent and a conflicting rejection returned 409. Browser
-verification covered the monitor graph path, alert filter, source picker,
-contract isolation, and approval history without page errors. These checks ran
-in a fresh `PIPELINE_ENV`; the configured dashboard mapping pointer stayed at
-its prior version. The test table was removed afterward. Independent labels,
-held-out example quality comparison, and deployment remain separate gates.
+```mermaid
+flowchart TD
+    A["Raw Ingestion (CSV / Source)"] --> B["Validate against Data Contract"]
+    B -- "Passed (Clean)" --> C["Commit Report & Ingest Data"]
+    B -- "Failed (Drift Detected)" --> D["Profile Source & Diagnose Root Cause"]
+    
+    D --> E{"Drift Classification"}
+    E -- "Column Rename" --> F1["Rename Specialist"]
+    E -- "Type Mismatch" --> F2["Type Specialist"]
+    E -- "Null Values" --> F3["Null Policy Specialist"]
+    E -- "Multiple Drifts" --> F4["Multi-Specialist Coordinator"]
+    E -- "Unknown / Unfixable" --> X["Escalate (Terminal Failure)"]
+    
+    F1 & F2 & F3 & F4 --> G["Synthesize Declarative Patch"]
+    G --> H{"Confidence Check"}
+    
+    H -- "Confidence >= 0.80" --> I["Apply In-Memory Patch & Re-validate"]
+    H -- "Confidence < 0.80" --> J["Durable Pause: Human Review"]
+    
+    J -- "Approved" --> I
+    J -- "Rejected" --> X
+    
+    I -- "Assertions Passed" --> K["CAS Commit Mapping to Postgres"]
+    I -- "Assertions Failed (< 2 attempts)" --> D
+    I -- "Assertions Failed (>= 2 attempts)" --> L["Auto-Rollback CAS & Escalate"]
+    K --> C
+```
 
 ---
 
-## Build status
+## Technology Stack
 
-| Phase | Scope | Status |
-|---|---|---|
-| **0** | Deployment skeleton — public frontend to public backend, bearer auth, Neon | **done — verified live at the deployed URLs** |
-| **1** | Pipeline + contract + fault datasets | **done** |
-| **2** | Graph skeleton with stub nodes | **done** |
-| **3** | Real nodes (LLM) | **done — tuned and verified against a real model, all 6 fault datasets** |
-| **4** | Interrupt + Postgres checkpointer | **done — verified across a real process kill and restart, both approve and reject** |
-| **5** | Dashboard | **done — hand-rolled SVG GraphCanvas, verified against 5 real run states** |
-| 6 | Eval, docs, freeze | **in progress — topology export and docs done; eval and demo rehearsal blocked mid-sweep on Groq's daily token budget, auto-retrying (see below)** |
-
-Phase 0 contains **no pipeline code and no LangGraph usage** by design. `langgraph` is installed
-and its version recorded, but nothing imports it yet. Phase 1 adds the deterministic pipeline,
-contract, and fault datasets — still zero LLM calls and zero LangGraph.
+| Layer | Component | Description |
+| :--- | :--- | :--- |
+| **Agent Orchestration** | [LangGraph](https://github.com/langchain-ai/langgraph) | Cyclic, stateful graph execution with durable checkpointer storage. |
+| **Backend API** | FastAPI / Python 3.12+ | Asynchronous REST service with Pydantic validation. |
+| **LLM Inference** | Groq (`llama-3.3-70b-versatile`) | Ultra-fast inference with strict JSON schema outputs. |
+| **Database** | Neon Serverless Postgres | Relational data, mapping ledger, and LangGraph checkpointer storage. |
+| **Data Engine** | Pandas | High-speed vectorized validation assertions and patch execution. |
+| **Frontend** | React 19 + Vite + Tailwind CSS | Interactive dashboard with live run polling, graph visualization, and approvals. |
+| **State Management**| Zustand | Reactive client stores for runs, analytics, and authentication. |
 
 ---
 
-## Phase 1 — pipeline, contract, fault datasets
+## Quickstart & Local Development
 
-`backend/pipeline/` implements `load -> apply_mapping -> transform -> validate` exactly as
-specified. Pandera (`pandera.pandas`) is the oracle; `validate()` never raises — it converts
-`SchemaErrors` into a structured, parseable `FailureCase` list (column, check, failure count,
-example values).
+### Prerequisites
+* Python 3.12+ (or 3.14 with virtual environment)
+* Node.js 20+ / npm
+* A [Neon Postgres](https://neon.tech) database URL (or local PostgreSQL)
+* A [Groq API Key](https://console.groq.com)
 
-The mapping — the only thing the healing agent will ever be allowed to write — is a
-`MappingPatch` Pydantic model (`backend/pipeline/mapping.py`) with `extra="forbid"` and
-registry-checked op names, so a patch naming an unknown cast or an out-of-section key fails
-validation rather than being silently accepted. It is persisted in Postgres
-(`backend/services/store.py`, table `mapping_state`) as an **append-only** log — each save is a
-new row, so the previous mapping is never lost, which is also what
-"`apply_patch` backs up the current mapping" (ARCHITECTURE.md) means in practice. This was live
-data on the deployed backend from the moment Phase 1 landed, not something added later.
-
-**Verify it yourself:**
-
+### 1. Environment Setup
+Create a `.env` file in the project root:
 ```bash
-cd backend
-../.venv/Scripts/python.exe ../scripts/gen_fault_datasets.py   # (re)generates data/sources/*.csv
-../.venv/Scripts/python.exe ../scripts/check_pipeline.py       # runs the Phase 1 DoD checks
+cp .env.example .env
+```
+Fill in your credentials:
+```ini
+DATABASE_URL=postgresql://user:password@ep-xyz.region.aws.neon.tech/neondb?sslmode=require
+SHARED_TOKEN=your-random-24-character-hex-token
+GROQ_API_KEY=gsk_your_groq_api_key
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+APP_ENV=local
+PIPELINE_ENV=dashboard-demo
 ```
 
-`check_pipeline.py` talks to the real `DATABASE_URL` from `.env` — the same Postgres the
-deployed backend uses — so it is exercising actual persistence, not a mock. It prints, for every
-fault dataset, the expected vs. actual pass/fail and the full structured failure list; then it
-manually patches `day2_renamed`'s rename fault, saves it to Postgres, reloads it, and confirms
-the pipeline now passes — proving the mapping is a real healing target, not just a schema.
-
-| Dataset | Injected fault | Result |
-|---|---|---|
-| `day1_clean` | none | passes |
-| `day2_renamed` | `customer_id` → `cust_id` | fails: `column_in_schema` / `column_in_dataframe`; passes after `renames: {cust_id: customer_id}` |
-| `day3_type_drift` | `revenue` as `"1,240.00"` strings | fails: `dtype('float64')` |
-| `day4_combo` | rename + type drift together | fails both signatures at once; passes with both patches applied together |
-| `day5_unfixable` | `region` abbreviated to `N/S/E/W` + new `currency` column | fails: `column_in_schema` (currency) + `isin(...)` (region) — confirmed **not** healable by any single mapping op, by design |
-| `day6_ambiguous_rename` | `customer_id` → `acct_ref` (added in Phase 3 — see below) | fails: `column_in_schema` / `column_in_dataframe`, same shape as day2; passes after `renames: {acct_ref: customer_id}` — the fault is identical in kind to day2, only the new column's name is deliberately non-obvious |
-
----
-
-## Phase 2 — graph skeleton with stub nodes
-
-`backend/graph/` wires the full topology from ARCHITECTURE.md's "Graph Topology" section — 13
-nodes, 4 named routers (`route_after_run`, `route_after_diagnose`, `route_after_confidence`,
-`route_after_rerun`) plus one necessary fifth conditional edge (`route_after_human_approval`,
-dispatching the human's own decision rather than pipeline/agent state — not one of the rubric's
-named four, but the topology diagram's approve/reject fork requires a callable regardless).
-Every node body is a hardcoded dict, keyed by a scenario string smuggled through `source_path`
-(`stub://heals-in-3`, `stub://never-heals`, ...) — see
-`backend/graph/nodes/_phase2_stub_scenarios.py`, deliberately marked as scaffolding that Phase 3
-replaces. **Zero LLM calls, zero prompts.**
-
-Two things are real already, not stubbed, because they're graph-topology guardrails rather than
-pipeline logic: `apply_patch` increments `heal_attempts` from actual prior state (never a
-router), and `human_approval` calls the real `interrupt()` — compiled against an in-memory
-checkpointer for now; Phase 4 swaps in the Postgres one without touching this code.
-
-**Verify it yourself:**
-
+### 2. Backend Setup
 ```bash
-cd backend
-../.venv/Scripts/python.exe ../scripts/graph_smoke_test.py
-```
-
-Runs five scenarios, printing the live node sequence for each, then reports router/branch
-coverage and the Definition of Done explicitly:
-
-| Scenario | Proves |
-|---|---|
-| `clean` | `route_after_run`'s pass branch — no healing at all |
-| `heals-in-3` | the heal cycle itself: fails attempts 1–2, passes on 3, cycling `spec_rename → spec_type → spec_nullability` across the three specialist branches, `history` accumulating 3 distinct entries (not overwritten) |
-| `never-heals` | `MAX_HEAL_ATTEMPTS` cap → `escalate` |
-| `unknown-drift` | `route_after_diagnose`'s direct-to-`escalate` branch |
-| `low-confidence-approve` / `-reject` | `interrupt()` actually halts (`next == ("human_approval",)`, payload inspectable), `Command(resume=...)` actually resumes at `human_approval` — not from `START` — and both the approve and reject forks route correctly |
-
-All 11 (router, branch) pairs report `[OK]`; all 6 Definition of Done checks report `[PASS]`.
-
-(This phase's `scripts/graph_smoke_test.py` and `backend/graph/nodes/_phase2_stub_scenarios.py`
-were removed once Phase 3 replaced the nodes they depended on — the `stub://` scenario strings
-those real nodes no longer understand — leaving them in place would have silently produced
-misleading output rather than a real regression check. The Phase 2 node sequence and coverage
-table above are preserved from the verified run, not reproducible by re-running the repo as it
-stands now.)
-
----
-
-## Phase 3 — real nodes
-
-Split into a deterministic half and an LLM half. Both are done and verified against a real
-model — a `GROQ_API_KEY` arrived partway through this phase; everything below the deterministic
-section was tuned and confirmed against `openai/gpt-oss-120b` on Groq, not mocked.
-
-### Deterministic half — done, verified
-
-`profile_source` and `diff_contract` are real; `run_pipeline`, `rerun_validate`, and
-`apply_patch` now call the actual Phase 1 pipeline and persist to Postgres instead of returning
-hardcoded dicts.
-
-The one design decision worth explaining: `diff_contract` sits on the heal-cycle's loop-back edge
-(`route_after_rerun` loops to it, not back to `profile_source`), so its output must genuinely
-change between iterations — otherwise diagnose sees the same "everything is still wrong" picture
-on attempt 2 as attempt 1, which is exactly how an agent ends up proposing overlapping or
-redundant patches instead of converging. Verified against real `day4_combo` data before writing
-the fix: with an empty mapping, Pandera reports 4 failure signals; after a rename-only patch, only
-2 remain — a strict subset. So `diff_contract` derives `drift_items` from
-`assertion_failure_details` (the structured form behind `assertion_failures`, refreshed by
-whichever of `run_pipeline`/`rerun_validate` most recently ran), not from a one-time raw-file
-snapshot.
-
-Proven end-to-end with a rule-based stand-in for diagnose (correct-by-construction classification,
-not the real LLM — this isolates "does my new code work" from "is the prompt any good"), using an
-isolated `pipeline_env` throughout:
-
-| Dataset | Result |
-|---|---|
-| `day1_clean` | `clean`, 0 attempts |
-| `day2_renamed` | `healed`, exactly 1 attempt |
-| `day3_type_drift` | `healed`, exactly 1 attempt |
-| `day4_combo` | `healed`, **exactly 2 attempts** — matches the Phase 3 DoD's "not eventually passes" |
-
-Also confirmed the real graph — the actual `build_graph()`, mixing sync (`profile_source`,
-`diff_contract`) and async (everything touching Postgres or Groq) node functions in one
-`StateGraph` for the first time — compiles and runs correctly with no LLM key configured at all:
-`day1_clean` passes straight through with no LLM call needed, and `day2_renamed` (which does need
-one) has `diagnose` fail cleanly on the missing key and the run escalate rather than crash —
-`nodes must never raise`, holding even under a real, not simulated, failure.
-
-### LLM half — done, tuned and verified against a real model
-
-`backend/services/llm.py` (Groq, `openai/gpt-oss-120b`, JSON mode, retry with backoff on
-`RateLimitError`), `backend/prompts/prompts.py`, and the real `diagnose` / `spec_rename` /
-`spec_type` / `spec_nullability` / `propose_patch` nodes. Every LLM node validates its parsed
-JSON against a Pydantic model in `backend/graph/schemas.py` before returning — required
-regardless of JSON mode, which guarantees syntax, not schema.
-
-**Specialist scope leakage** — each specialist's raw output is validated against its *own*
-narrowly-scoped model (`RenameSpecialistOutput`, `TypeSpecialistOutput`,
-`NullabilitySpecialistOutput`), each `extra="forbid"` and declaring only its one mapping section.
-This is deliberately not just a `MappingPatch` check: `MappingPatch` declares all four sections as
-optional, so a rename specialist that also emits a stray `casts` key would pass general validation
-silently and just look like a small, unrelated, harmless patch fragment — exactly the failure mode
-that's expensive to debug later. `propose_patch` gets the same protection in the other direction:
-its own model validates only `{"rationale": ...}`, so if it tries to invent its own patch content
-instead of describing the specialist's, that's also caught immediately. Confirmed with the LLM
-call mocked before a real key existed (10 cases: valid responses, a missing field, an out-of-range
-confidence, a leaked `casts` key from the rename specialist, an unknown cast op name, a leaked
-`patch` key from `propose_patch`) — every case caught and handled without raising.
-
-**A day5/day6 split, not one dataset.** The original single ambiguous-case dataset conflated two
-different questions diagnose has to answer separately: *is there a viable class of fix at all*,
-and *how much do I trust my specific guess*. `day5_unfixable` (two unrelated, non-mechanical
-drifts) answers the first one "no" — `drift_class="unknown"`, which routes straight to
-`escalate` with no patch proposed at all. `day6_ambiguous_rename` (a real rename, but to a
-non-obvious column name) answers the first one "yes, rename" and the second one "not confidently"
-— it routes through a specialist to `human_approval` with a real patch to review. Conflating them
-into one dataset either auto-applies a wrong guess or escalates a case a human could have quickly
-approved; see `prompts.py`'s `DIAGNOSE_SYSTEM` and ARCHITECTURE.md's Fault Datasets section for
-the full reasoning (found empirically, mid-build, and corrected in both places).
-
-**A genuine model quirk, found and fixed.** `openai/gpt-oss-120b` on Groq reliably (not
-occasionally) wraps its JSON response as a list of 1-2 near-duplicate candidate objects instead
-of one top-level object — confirmed not a leaked reasoning trace (`reasoning_format="hidden"`
-made no difference) and not a temperature artifact (temperature 0 made it *worse*, 5/8 vs 7/8
-correct — this model's serving isn't fully deterministic even at temperature 0). An explicit
-"respond with exactly one JSON object, never a list" instruction in every system prompt fixed it
-outright; `graph/schemas.py:normalize_llm_json` remains as a defensive backstop (diagnose breaks
-ties on the lowest confidence among candidates — consistent with "prefer low confidence when
-uncertain" — other nodes take the first valid one, having no confidence field to compare).
-
-**Calibration, verified against the real model, 25/25 across a repeatability sweep** (5 runs
-each for day2/3/5/6, 10 for day4 — day4 needed a worked example added to the prompt after an
-initial 7/8, since abstract rules alone under-generalized to "two drift items present" reading
-as automatically ambiguous):
-
-| Dataset | drift_class | confidence | Result |
-|---|---|---|---|
-| `day2_renamed` | rename | 0.92-0.96 | auto-heals, 1 attempt |
-| `day3_type_drift` | type | 0.90-0.92 | auto-heals, 1 attempt |
-| `day4_combo` | rename, then type | 0.90-0.93 each | auto-heals, **exactly 2 attempts** |
-| `day5_unfixable` | unknown | 0.2 | escalates directly, no patch proposed |
-| `day6_ambiguous_rename` | rename | 0.3 | halts at `human_approval` with a real, **correct** patch (`{renames: {acct_ref: customer_id}}`); approving it heals in 1 attempt; rejecting it escalates with `heal_attempts` still 0 |
-
-All five confirmed via the real, complete `build_graph()` — no rule-based stand-in, no mocked
-LLM call — including `day6`'s full interrupt → real patch review → `Command(resume="approve")`
-→ heal round trip, and its reject counterpart.
-
----
-
-## Phase 4 — interrupt + Postgres checkpointer
-
-`backend/services/checkpointer.py` wraps `AsyncPostgresSaver` around the same lifespan-owned
-pool `db.py` already manages — confirmed against `langgraph-checkpoint-postgres` 3.1.2 before
-writing it: the constructor accepts either a bare connection or an `AsyncConnectionPool`, and
-every internal cursor opens with its own explicit `row_factory=dict_row` regardless of the
-pool's default, so there's no conflict with `db.py`'s pool-wide setting. `main.py`'s lifespan
-calls `setup_checkpointer()` (idempotent — a version-tracked migrations table, safe on every
-boot) and compiles the graph once per process onto `app.state.graph_app`.
-
-`backend/routers/runs.py` adds the four endpoints this phase needs to prove over real HTTP:
-`POST /api/runs` (trigger), `GET /api/runs/{id}` (poll — synthesizes `api_status:
-"awaiting_approval"` from the checkpointer's own pending-interrupt state, since `human_approval`
-can't have written that into `HealState` itself: the node never returns while parked inside
-`interrupt()`), `POST /api/runs/{id}/approve`, `POST /api/runs/{id}/reject`. Upload and
-run-listing are Phase 5 dashboard concerns, not needed to prove this phase's mechanism.
-
-**The test that matters: a real process kill, not a reload.** Triggered `day6_ambiguous_rename`
-over HTTP, polled until `awaiting_approval`, confirmed the exact state (`next: ["human_approval"]`,
-the real proposed patch, `heal_attempts: 0`) — then hard-killed the backend process outright
-(`Stop-Process -Force`, port confirmed released) and, before starting anything new, queried
-Postgres directly and independently of the application: **8 checkpoint rows existed for that
-`thread_id`, written by a process that no longer existed.** Started a completely fresh process
-(new PID, new `AsyncPostgresSaver` instance, zero in-memory knowledge of the run) and confirmed
-`GET /api/runs/{id}` returned the identical state from Postgres alone. Then approved.
-
-The rigorous proof isn't "it healed" — a broken checkpointer that silently restarted from
-`START` could plausibly reach the same end state by re-running everything and getting lucky
-with the same diagnosis. The proof is grepping **the fresh process's own log, from its very
-first line**, and finding no `run_pipeline`/`diagnose` entries for that run at all:
-
-```
-run <id>: node 'human_approval' fired
-run <id>: node 'apply_patch' fired
-run <id>: node 'rerun_validate' fired
-run <id>: node 'commit_report' fired
-```
-
-Repeated identically for reject, on a second run and a third fresh process (different resume
-value, different downstream route — approve resuming correctly doesn't imply reject does; they
-share nothing except the interrupt itself). The fresh process's log:
-
-```
-run <id>: node 'human_approval' fired
-run <id>: node 'escalate' fired
-```
-
-`heal_attempts` stayed `0` and `applied_patch` stayed `null` — confirming `apply_patch` never
-fired on the reject path, exactly the guardrail it must never violate. Both runs' checkpoints
-were also confirmed present in Postgres by direct query, independent of the API layer, both
-before and after their respective process kills.
-
-All of this ran under an isolated `PIPELINE_ENV=phase4-test` (reset between the two test runs,
-since the first run's approved patch would otherwise have made the second run's data pass
-cleanly with no drift to heal) — the live `default` mapping was confirmed untouched throughout.
-
----
-
-## Phase 5 — dashboard
-
-Two backend additions, both needed before the frontend could show anything real: a lightweight
-run registry (`run_records` — the checkpointer has no listing API, so `GET /api/runs` needs
-*something* to enumerate before it can ask the checkpointer for each one's live status), and a
-`run_id` column on `mapping_state` so `GET /api/runs/{id}` can return a per-run patch audit trail
-instead of the whole namespace's history with every run mixed together — the addition suggested
-for this phase, and cheap precisely because `mapping_state` was already append-only from Phase 1.
-
-**GraphCanvas is the priority panel**, per explicit project direction: the `↺ Heal attempt N`
-badge is the single most important pixel in the project, prioritized over every other panel.
-Hand-rolled SVG (`components/GraphCanvas/topology.js` + `GraphCanvas.jsx`) — no React Flow, same
-reasoning as everywhere else in this build: the topology is fixed and known, a layout library is
-a dependency and a bundle-size cost for zero marks. Node "visited" status is inferred from the
-polled `HealState` snapshot (missing_column/unexpected_column pairs, `history` entries, terminal
-status) rather than tracked live — REST polling has no per-node event stream (`next` only tells
-you the interrupt's pause point precisely; ARCHITECTURE.md already notes SSE as a known
-limitation), so the canvas is honest about that rather than faking finer-grained animation.
-
-**A real bug found via testing, not inspection**: the first `deriveVisited` pass only looked at
-the *current* `drift_class`/`confidence` fields, which reflect the most recent `diagnose` call —
-for `day4_combo`, a second diagnose call failing after the first one's rename fix succeeded
-erased the rename attempt from the graph's visited-node coloring entirely, even though it had
-genuinely happened. Fixed by also walking `history`, whose entries never get overwritten. Caught
-by screenshotting a real escalated run and asking why half the nodes were idle-colored when the
-`history` array clearly showed a completed attempt — not by re-reading the component code.
-
-**Verified against 5 real run states**, captured via Playwright driving actual Chrome against the
-Vite dev server and the local backend (screenshots, not just component code review):
-escalated-via-cap (`day4_combo`, rate-limited mid-cycle — see the note below), healed-via-auto-apply,
-healed-via-human-approval, escalated-via-rejection, and clean (no drift). Each state's GraphCanvas
-coloring, AssertionBars, SchemaDiff, PatchDiff, and (where applicable) MappingAudit and
-AttemptTimeline were checked against the actual JSON the backend returned, not assumed from the
-component code. Found and fixed a second real bug this way: `PatchDiff` showed the *current*
-`confidence`/`drift_class` fields next to an *already-applied* patch — for the same reason as the
-GraphCanvas bug, a later diagnose call's confidence had overwritten the value that actually
-justified the currently-displayed patch, making a correctly-applied high-confidence fix look like
-a 0.00-confidence guess. Fixed by sourcing both fields from the `history` entry that produced the
-displayed patch, falling back to the live fields only when showing a not-yet-applied proposal.
-
-**A Groq free-tier daily quota exhaustion happened live during this phase's verification** (visible
-in `backend`'s own logs: rate-limited, retried with backoff, then degraded to
-`unknown`/`confidence: 0.0` and escalated) — not a bug, but worth being transparent about: it's
-why some of this phase's live-trigger screenshots show an escalation where a clean auto-heal was
-expected. The dashboard rendered every one of those states correctly, including the guardrail
-working exactly as designed under a real, not simulated, failure — `day2`/`day3`/`day4`'s
-consistent auto-heal behavior was already exhaustively verified against a fresh quota in Phase 3
-(25/25 across a repeatability sweep) and is not being re-litigated here.
-
----
-
-## Phase 6 — eval, docs, freeze
-
-### Graph topology
-
-![Graph topology](docs/graph.png)
-
-Generated directly from the real, compiled graph — `build_graph(...).get_graph().draw_mermaid_png()`
-— not hand-drawn. This is a verification artifact as much as a diagram: it's LangGraph's own view
-of the 13 nodes and every edge (solid = fixed, dotted = conditional) actually wired in
-`backend/graph/build.py`, so it can't silently drift from the code the way a hand-maintained
-diagram could. Matches ARCHITECTURE.md's "Graph Topology" ASCII diagram edge-for-edge.
-
-### Eval
-
-`eval/run_eval.py` runs all 6 fault datasets twice — baseline (healing disabled, the seed mapping
-straight off disk, no Postgres, no LLM) and the real, complete graph (auto-approving any patch
-that reaches `human_approval`, since only `day6_ambiguous_rename` is expected to land there —
-`day5_unfixable` diagnoses as `unknown` and escalates directly, so there's nothing to
-auto-approve for it). Each full-graph dataset run gets its own isolated Postgres `pipeline_env`
-namespace (`eval-fullgraph-<dataset>`) so one dataset's healing patches can never contaminate the
-next dataset's starting mapping — the graph's own nodes have no per-call override for this, so the
-script achieves it by setting `PIPELINE_ENV` and clearing `config.get_settings`'s cache before
-each dataset, the same isolation goal `scripts/check_pipeline.py` established in Phase 1, adapted
-to a mechanism the graph nodes actually respect.
-
-**Currently blocked mid-sweep by Groq's daily token budget** — see
-[docs/eval_summary.md](docs/eval_summary.md) for the live status and the partial results already
-confirmed today (`day1_clean`, `day2_renamed`, `day5_unfixable`). A background job is polling Groq
-with realistic-sized probe requests and will re-run the eval automatically once the budget
-recovers enough for a full, uninterrupted sweep; this section and the summary doc will be updated
-with the completed table before feature freeze.
-
-### Demo script rehearsal
-
-Same blocker applies here: steps 2-4 of Appendix C's demo script (`day2`, `day4`, `day6`) each
-need a real, successful `diagnose` call, so rehearsal of those steps is deferred to the same
-window as the eval rerun above. Steps 1 (`day1_clean`, no LLM call at all) and 5
-(`day5_unfixable`) don't depend on it — `day5`'s real classification is `unknown` anyway, so
-today's quota-forced `unknown`/`escalate` default happens to land on the same outcome a
-successful call would have produced, and both were exercised live during Phase 5's dashboard
-verification.
-
----
-
-## Recorded versions
-
-Verified against the installed packages, not against documentation.
-
-| Package | Version |
-|---|---|
-| **langgraph** | **1.2.11** |
-| langgraph-checkpoint | 4.2.0 |
-| langgraph-checkpoint-postgres | 3.1.2 |
-| langchain-core | 1.6.0 |
-| fastapi | 0.141.1 |
-| uvicorn | 0.52.4 |
-| pydantic | 2.13.4 |
-| psycopg | 3.3.4 |
-| pandas | 3.0.5 |
-| pandera | 0.32.1 |
-| Python | 3.14 (local 3.14.3 / container 3.14.7) |
-| Postgres (Neon) | 18.6 |
-
-### LangGraph API verification
-
-ARCHITECTURE.md warns that its import paths may be stale. They were checked against 1.2.11 and
-**all still resolve**: `langgraph.graph.{StateGraph,START,END}`,
-`langgraph.types.{interrupt,Command}`, `langgraph.checkpoint.postgres.aio.AsyncPostgresSaver`.
-
-Behaviour was verified by running a real graph, not just by importing names:
-
-- `interrupt(value)` halts; `Command(resume=...)` resumes **at the interrupted node**, not at START.
-- `Annotated[list, operator.add]` appends across resumes (`[{attempt: 1}, {attempt: 2}]`).
-- A resumed node **re-executes from the top of its function body**, so `human_approval` must have
-  no side effects before its `interrupt()` call.
-
-Two findings that change how the code must be written:
-
-1. **`AsyncPostgresSaver.from_conn_string()` is an async context manager** and closes its
-   connection on block exit. A checkpointer opened that way cannot resume a graph across HTTP
-   requests. The pool is therefore owned by the FastAPI lifespan ([backend/db.py](backend/db.py))
-   and the checkpointer will be built around it in Phase 4.
-2. **uvicorn hard-codes `ProactorEventLoop` on Windows** via a loop *factory*, which ignores
-   `asyncio.set_event_loop_policy()`. psycopg's async mode refuses that loop, so a bare
-   `uvicorn main:app` on Windows starts fine and then every DB call times out with no clear cause.
-   Local Windows dev must use [backend/run_local.py](backend/run_local.py). The Linux container
-   uses uvloop and is unaffected.
-
-### Deviation from ARCHITECTURE.md
-
-The document's `contract.yaml` declares `region: { dtype: object }`. On pandas 3, a string column
-infers as `str`, not `object`, so that contract would fail on `day1_clean.csv` — the control case —
-and spuriously trigger the heal loop. The contract will use `str`. Keeping pandas 3 also keeps the
-local and container runtimes identical, which matters more on a deploy-first schedule than matching
-the document verbatim. Also note `pandera.pandas` is the current import namespace.
-
----
-
-## Local development
-
-Requires Python 3.14, Node 24, and a Neon connection string.
-
-```bash
-# secrets
-cp .env.example .env          # then fill in DATABASE_URL and SHARED_TOKEN
-                              # token: python -c "import secrets;print(secrets.token_hex(24))"
-
-# backend
+# Create and activate virtual environment
 python -m venv .venv
-./.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
-cd backend && ../.venv/Scripts/python.exe run_local.py 8123
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -r backend/requirements.txt -r requirements-dev.txt
+
+# Start backend server
+cd backend
+python run_local.py 8000
 ```
+> **Note for Windows users:** Always run `python run_local.py` instead of bare `uvicorn`. It installs the required `SelectorEventLoop` for asynchronous `psycopg 3` socket operations.
 
-Use `run_local.py`, not `uvicorn`, on Windows — see the event-loop note above.
-
+### 3. Frontend Setup
+In a new terminal:
 ```bash
-# frontend
 cd frontend
-cp .env.example .env.local    # set VITE_API_BASE_URL + VITE_SHARED_TOKEN
+cp .env.example .env.local
+```
+In `frontend/.env.local`:
+```ini
+VITE_API_BASE_URL=http://127.0.0.1:8000
+VITE_SHARED_TOKEN=your-random-24-character-hex-token
+```
+Install dependencies and launch the dev server:
+```bash
 npm install
-npm run dev                   # http://localhost:5173
+npm run dev
 ```
+Open **`http://localhost:5173`** in your browser.
 
-The frontend renders a Phase 0 status page that runs all four Definition-of-Done checks in the
-browser, including a deliberately unauthenticated request that must be rejected with 401.
+---
 
-### Running the container locally
+## Core API Reference
 
-Build from the repository root, not from `backend/`:
+| Endpoint | Method | Auth | Description |
+| :--- | :--- | :--- | :--- |
+| `/health` | `GET` | None | Liveness probe (does not touch database). |
+| `/api/ping` | `GET` | Bearer | Proves authenticated database round-trip. |
+| `/api/runs` | `GET` | Bearer | Lists pipeline runs across all contracts or filtered by `contract_name`. |
+| `/api/runs` | `POST` | Bearer | Triggers an ingestion run for a source dataset against a contract. |
+| `/api/runs/{id}` | `GET` | Bearer | Retrieves full graph state, assertion results, schema diffs, and patch details. |
+| `/api/runs/{id}/approve` | `POST` | Bearer | Resumes a paused run from `human_approval` and applies proposed patch. |
+| `/api/runs/{id}/reject` | `POST` | Bearer | Rejects proposed patch and terminates run with `escalated` status. |
+| `/api/config/contracts` | `GET` | Bearer | Enumerates active data contracts and registered schemas. |
+| `/api/config/mapping` | `GET` | Bearer | Retrieves current active schema mapping version. |
+| `/api/config/mapping/history` | `GET` | Bearer | Returns full audit trail of mapping versions and rollback events. |
+| `/api/app/datasets` | `POST` | Bearer | Uploads a CSV dataset (capped at 5 MB / 5,000 rows). |
+
+---
+
+## Running Tests
+
+The test suite contains 302 unit, integration, and regression tests:
 
 ```bash
-docker build -f backend/Dockerfile -t shp-backend:phase0 .
-docker run --rm -p 8199:10000 -e PORT=10000 \
-  -e DATABASE_URL="..." -e SHARED_TOKEN="..." \
-  -e CORS_ORIGINS="http://localhost:5173" -e APP_ENV=container \
-  shp-backend:phase0
+# Run complete test suite
+pytest -o pythonpath=. -q
+
+# Run with coverage report
+pytest -o pythonpath=. --cov=backend
 ```
 
 ---
 
-## API
+## Documentation & Deep Dives
 
-| Route | Auth | Purpose |
-|---|---|---|
-| `GET /health` | none | Liveness. Deliberately does **not** touch the DB, so a suspended Neon compute cannot make the deploy look unhealthy. |
-| `GET /` | none | Service banner. |
-| `GET /api/ping` | Bearer | Authenticated round-trip. Writes a row to `deploy_probe` and reports the Postgres version plus recorded package versions. (Phase 0) |
-| `POST /api/runs` | Bearer | `{source_path}` → `{run_id}`. Runs the graph in a background task; poll rather than WebSocket. Bare dataset filenames are resolved against `data/sources/`. (Phase 4) |
-| `GET /api/runs` | Bearer | Lists `run_records`, enriched with each run's live checkpointer status (`aget_state`, one call per run — see Known Limitations). (Phase 5) |
-| `GET /api/runs/{id}` | Bearer | Full `HealState`, plus `api_status`/`awaiting_approval` synthesized from the checkpointer's own pause state, and `mapping_audit` — the per-run patch history. (Phase 4; `mapping_audit` added Phase 5) |
-| `POST /api/runs/{id}/approve` | Bearer | `{note?}` → resumes from `human_approval`, not `START`. (Phase 4) |
-| `POST /api/runs/{id}/reject` | Bearer | `{note?}` → resumes and routes to `escalate`; `apply_patch` never fires. (Phase 4) |
-| `GET /api/config/mapping` | Bearer | The current mapping in the app's namespace. (Phase 5) |
-
-All `/api/*` routes require `Authorization: Bearer <SHARED_TOKEN>`; anything else returns 401.
-There is no file-upload endpoint — the dashboard's dataset picker only offers the 6 fault
-datasets already shipped in `data/sources/`.
-
----
-
-## Deployment
-
-Backend on Render (Docker), frontend on Vercel, Postgres on Neon.
-
-**Render** — either apply [render.yaml](render.yaml) as a blueprint, or create a Docker web
-service manually with:
-
-- Dockerfile path `./backend/Dockerfile`
-- **Docker build context `.` (the repository root, which is Render's default) —
-  not `./backend`.** The Dockerfile's `COPY` paths are repo-relative, because from
-  Phase 1 the backend also needs `config/` and `data/`, which live outside `backend/`.
-  Pointing the context at `backend/` fails the build with `"/requirements.txt": not found`
-  and an exit code of 1.
-- Health check path `/health`
-- Env vars: `DATABASE_URL`, `SHARED_TOKEN`, `CORS_ORIGINS`, `APP_ENV=render`.
-  A missing required variable stops the service with an explicit
-  `CONFIGURATION ERROR` block naming it, rather than a bare pydantic traceback.
-
-**Vercel** — import the repo and set **Root Directory to `frontend`** (the repo root is not the
-frontend). Framework preset Vite. Env vars `VITE_API_BASE_URL` (the Render URL, no trailing slash)
-and `VITE_SHARED_TOKEN`.
-
-Then add the real Vercel origin to `CORS_ORIGINS` on Render and redeploy.
-
-### Operational caveats
-
-- **Render free tier sleeps** after ~15 min and takes ~50s to wake. Warm it before a live demo.
-- **Neon free tier suspends** its compute when idle; the first connection can exceed 30s. The pool
-  is opened with `wait=False` so the app boots immediately rather than blocking on a cold compute.
-- **Render's filesystem is ephemeral.** The mapping config lives in Postgres from Phase 1 onward;
-  `config/mapping.yaml` is only a seed.
-
----
-
-## Testing
-
-`tests/` is an offline pytest suite — no network, no real LLM calls, no Neon. Run it with:
-
-```bash
-./.venv/Scripts/python.exe -m pip install -r backend/requirements.txt -r requirements-dev.txt
-./.venv/Scripts/python.exe -m pytest
-```
-
-**103 tests, ~6s, 71% coverage** on the modules this suite targets (`graph/`, `pipeline/`,
-`services/analytics.py`) — every individual module in that set lands between 70% and 100% except
-the graph nodes' own LLM/Postgres call sites, excluded on purpose (see below). Coverage is scoped
-via `pytest.ini`'s `--cov`; the number above is `pytest`'s own reported total, not a target.
-
-| File | Covers |
-|---|---|
-| `tests/conftest.py` | Fixtures: a `HealState` factory, fake `StateSnapshot`/graph-app doubles, and a stub-graph builder that monkeypatches `graph/build.py`'s 10 LLM/DB-backed node names, then compiles the **real** topology around them. |
-| `test_routing.py` | All 5 conditional-edge routers (`graph/routing.py`), parametrized — including the `confidence == 0.75` and `heal_attempts == MAX_HEAL_ATTEMPTS` boundaries. |
-| `test_graph_structure.py` | The compiled 13-node topology (all nodes present, the heal-cycle edge exists) and, by actually running the stub graph, the cycle/cap/history-reducer/interrupt-fork behavior — plus `graph/schemas.py`'s LLM-output validation. |
-| `test_serialization.py` | `routers/runs.py`'s `_serialize_state` — the state → API shape contract. |
-| `test_pipeline.py` | `pipeline.runner.run_pipeline` against all 6 real fault datasets in `data/sources/`, plus `MappingPatch`'s validators. |
-| `test_analytics.py` | `services/analytics.py`'s caching/coalescing/field-derivation, and `routers/analytics.py`'s aggregation math. |
-| `test_chat_context.py` | `services/chat_context.py`'s payload assembly, truncation, and token-cap logging. |
-| `test_regressions.py` | 5 real bugs found during this build, each pinned by a test that would fail against the old code. |
-
-**Regression tests** (`test_regressions.py`) are the file that distinguishes this suite from a
-coverage exercise — each one pins a bug that actually shipped and was actually found against real
-data, not a hypothetical:
-
-1. `_serialize_state` built its response with `**values` spread *after* the synthesized
-   `awaiting_approval` key, so `HealState`'s own permanently-`False` field silently overwrote the
-   live interrupt signal — `ApprovalPanel` had never rendered for a real interrupted run until the
-   spread order was fixed.
-2. A rejected run's empty `history` still needs `human_decision`/`proposed_patch`/`final_message`
-   populated alongside it — found when the read-only chat feature answered "why did this
-   escalate?" with no idea a human had ever reviewed anything.
-3. `drift_distribution` used to credit an attempt by its own `rerun_validate` result rather than
-   the run's final outcome: `day4_combo`'s rename attempt reports `result="failed"` (an unrelated
-   type drift was still present on that rerun) even though the run heals two attempts later —
-   crediting it that way told a false "most renames escalate" story.
-4. `mean_heal_attempts` divided by `drifted_runs` (which includes runs with 0 attempts, by
-   construction), producing a nonsensical sub-1.0 mean; the correct denominator is `attempted_runs`.
-5. `drift_distribution` counted a still-paused (`awaiting_approval`) run as escalated, purely
-   because it hadn't resolved yet, not because it had actually escalated.
-
-**Deliberate exclusion:**
-
-> LLM node behaviour is not unit-tested. Non-deterministic output means such tests
-> either flake or assert only that a mock was called. Model behaviour is measured instead by
-> eval/run_eval.py and the Phase 3 calibration sweep (25/25 across six datasets). Unit tests cover
-> deterministic logic: routing, graph structure, serialization contracts, pipeline validation,
-> analytics aggregation, and chat context assembly.
-
-Mocking the LLM to return a **fixed** value in order to test *this project's own* routing — e.g.
-"if `diagnose` returns `confidence=0.3`, does the compiled graph actually pause at
-`human_approval`?" (`test_graph_structure.py`'s `TestHumanApprovalFork`) — is used throughout this
-suite and is correct and expected: that tests this project's code, not the model's judgment.
-
----
-
-## Observability (LangSmith)
-
-Optional, opt-in, default OFF. LangGraph auto-instruments every graph run once 3 real process
-environment variables are present — no code change anywhere reads them, not in `graph/nodes/**`,
-not even in `main.py`:
-
-| Var | Purpose |
-|---|---|
-| `LANGSMITH_TRACING` | `true` to enable; unset/`false`/anything else is a no-op. |
-| `LANGSMITH_API_KEY` | From https://smith.langchain.com/ (Settings → API Keys). |
-| `LANGSMITH_PROJECT` | Project name traces are grouped under. |
-
-**These must be real OS environment variables**, not just lines in `backend/.env` —
-`config.Settings` (pydantic-settings) only populates its own declared fields from `.env`; it never
-forwards arbitrary keys into `os.environ`, which is what LangSmith's SDK actually reads at trace
-time. On Render, set them as real dashboard env vars (same mechanism as `DATABASE_URL`/
-`SHARED_TOKEN`). For local dev, export them in the shell before `run_local.py`.
-
-Every run's `configurable.thread_id` (already `run_id` — routers/runs.py's `_execute` sets this
-for the checkpointer, unchanged) is what LangSmith groups a run's traces by; no separate metadata
-plumbing was added.
-
-**Verified, not assumed** — against a real LangSmith project, a real key, and (for the fail-safe
-checks) a deliberately invalid one:
-
-- **Opt-in / fail-safe.** Ran `day4_combo` through a real 2-attempt heal cycle three ways:
-  `LANGSMITH_TRACING` unset, and `true` with a deliberately invalid `LANGSMITH_API_KEY`. Both
-  completed normally (`status: "healed"`). The invalid-key run's log shows `langsmith.client`
-  logging `403 Forbidden` as a `WARNING` on every ingest attempt — the SDK swallows its own
-  network/auth errors rather than raising, so a bad or missing credential can't break a run.
-- **`day4_combo` shows the heal cycle iterating twice.** Queried the real trace via
-  `langsmith.Client().list_runs(...)` filtered by `thread_id`: `diagnose` → `spec_rename` →
-  `propose_patch` → `apply_patch` → `rerun_validate` → `diff_contract` (the loop-back), then
-  `diagnose` → `spec_type` → `propose_patch` → `apply_patch` → `rerun_validate` →
-  `commit_report` — the two specialists and the loop are directly visible in the trace tree, not
-  inferred from the app's own logs.
-- **`day6` shows the interrupt as a pause.** The trace tree shows `human_approval` completing with
-  `status: "interrupted"` inside the first `LangGraph` root span, and a *second* `LangGraph` root
-  span beginning at the resumed `human_approval` (now `status: "success"`) →
-  `route_after_human_approval` → `apply_patch` → `rerun_validate` → `commit_report`. LangGraph
-  traces the initial run and the resume as two separate root traces, not one continuous span; both
-  carry the same `thread_id` in their metadata, which is what makes them identifiable as the same
-  run.
-- **Per-node latency: populated.** Every node span carries a real, non-zero latency (e.g.
-  `diagnose` ≈ 0.9–1.9s, `apply_patch` ≈ 0.6s, `rerun_validate` ≈ 0.3–0.6s across samples).
-- **Per-node token counts: NOT populated — a real, structural gap, reported rather than papered
-  over.** Every traced span shows `prompt_tokens`/`completion_tokens`/`total_tokens` as `0`, and a
-  direct look at one `diagnose` run's child spans shows only `route_after_diagnose` — no child span
-  for the actual Groq call at all. Cause: `services/llm.py` calls `groq.AsyncGroq` directly, not a
-  LangChain-wrapped chat model (e.g. `langchain_groq.ChatGroq`); LangSmith's automatic token-usage
-  extraction only fires for the latter. LangGraph's auto-instrumentation traces the *graph
-  structure* (nodes and routers, as `chain`-type spans with real latency) — it does not retroactively
-  instrument an arbitrary raw HTTP call made inside a node. Fixing this would mean wrapping
-  `services/llm.py`'s Groq calls in a LangChain-compatible interface — a real code change to
-  something every node calls into, outside this task's "env-var configuration only, no code
-  changes" boundary, so it was reported here rather than fixed.
-- **Interrupt/resume latency: no meaningful difference, locally.** Timed `human_approval` →
-  `commit_report` (from the backend's own millisecond-precision node-fired log lines) for `day6`,
-  two samples each way: tracing on (3973ms, 3695ms; avg 3834ms) vs tracing off (3844ms, 3755ms; avg
-  3800ms). The ~1% gap is smaller than the run-to-run variance *within* either condition (each
-  touches Postgres and a real Neon round-trip), so this is noise, not a tracing cost — at this
-  sample size.
-- **Deployed backend (Render): tracing confirmed active, no breakage — but not an apples-to-apples
-  latency delta.** With the 3 vars set as real Render dashboard env vars, triggered `day6` against
-  the live deployed backend; the resulting trace on LangSmith shows the identical
-  interrupt/resume shape (`human_approval` → `status: "interrupted"`, then a second root span
-  resuming through `apply_patch`/`rerun_validate`/`commit_report`), confirming tracing is genuinely
-  active there, not just configured. The resumed root span's own recorded latency was 191ms — far
-  faster than local's ~4s, almost certainly because Render and Neon share the same region (`ohio`/
-  `us-east-2`, per render.yaml) while this local machine reaches Neon over a much longer real
-  network path; that's a deployment topology difference, not a tracing effect. A naive HTTP-polling
-  measurement from this environment (curl round-trip: 3514ms) is dominated by that same network
-  path plus 1s polling granularity, not by graph execution time — LangSmith's own root-span timing
-  is the trustworthy number here. Toggling tracing off *on Render itself* to get a true controlled
-  delta wasn't done — it would need another env var round-trip and redeploy, and Render's own
-  cold-start/scaling variance would likely swamp a tracing-sized effect anyway. The controlled,
-  apples-to-apples comparison (same environment, only the env var changed) remains the local one
-  above; what's confirmed here is that tracing doesn't break or perceptibly slow down interrupt/
-  resume on the actual deployed target, which is the risk this check exists to catch.
-
-Local verification used a disposable `PIPELINE_ENV=langsmith-verification` namespace, fully wiped
-afterward via `scripts/reset_seed_data.py langsmith-verification`. The deployed check triggered one
-real run against the live backend's own (already test-touched, 11-run) default namespace — its
-checkpoint/run-record/mapping-audit rows were deleted immediately after, and `/api/analytics/
-summary` was confirmed to read back the exact pre-test numbers on both that namespace and the
-separate, untouched `dashboard-demo` seed data.
-
----
-
-## Known limitations
-
-Stated explicitly per ARCHITECTURE.md's Phase 6 instructions — this section earns marks, it does
-not lose them.
-
-- **Trigger-based, not scheduled.** A run starts on `POST /api/runs`; there is no cron, no
-  Airflow/Dagster/Prefect DAG, no polling of an upstream source for new files. A production
-  deployment of this pattern would sit behind a real scheduler; this project deliberately doesn't
-  build one (see ARCHITECTURE.md's guardrails on not adding orchestration tooling for its own sake).
-- **Two drift classes auto-heal reliably; the nullability specialist is partial.** `rename` and
-  `type` are exercised and calibrated against real fault data (`day2`/`day3`/`day4`); no fault
-  dataset in this build exercises `spec_nullability` end-to-end the way the other two are, so its
-  registry-checked `null_policy` patches are implemented and validated but not equivalently proven
-  against a real drift case.
-- **Patches config, not transform code — a deliberate safety boundary.** The agent can only ever
-  emit a `MappingPatch` fragment (renames/casts/null_policy/drops), validated against a
-  `extra="forbid"` Pydantic model with registry-checked op names before it's ever persisted. It
-  cannot write or execute arbitrary Python, by construction, not by prompting convention.
-- **Polling, not streaming transport.** The dashboard polls `GET /api/runs/{id}` every 2s; there
-  is no WebSocket/SSE push. `next` reports precisely where an interrupt paused, but GraphCanvas's
-  "visited" node coloring is reconstructed from the polled `HealState` snapshot and `history`, not
-  a live per-node execution event — there is no such stream to draw it from.
-- **6 hand-authored fault datasets, not a standard benchmark.** Each was written to exercise one
-  specific, understood failure mode (a clean rename, a type-cast drift, a combination, a
-  non-mechanical unfixable case, and a right-class/low-confidence case) — this proves the
-  mechanism handles the failure modes it was designed for, not general robustness against
-  arbitrary real-world drift.
-- **Render free-tier cold starts.** The backend sleeps after ~15 minutes idle and takes ~50s to
-  wake; a live demo should warm it (`GET /api/ping`) a minute beforehand.
-- `VITE_SHARED_TOKEN` is inlined into the client bundle, so the shared token is public to anyone
-  who loads the page. This is inherent to the single-shared-token design in ARCHITECTURE.md
-  (no user accounts, no JWT) and is acceptable only for a demo deployment.
-- `GET /api/runs` enriches every listed run with a live checkpointer read (`aget_state`) on every
-  call — fine at demo scale (a handful of runs), but each read goes through the checkpointer's own
-  serializing lock plus a Neon round-trip, so list latency grows linearly with run count. Not
-  optimized (e.g. caching terminal-status runs) since the demo never approaches a scale where it
-  matters.
-- **Groq's free-tier daily token budget (200,000 TPD) is a real, observed constraint on this
-  project**, not just a theoretical one — it was hit twice during the build (Phase 5's live
-  dashboard testing, and again during Phase 6's eval run), each time correctly triggering
-  retry-with-backoff and then graceful degradation to `unknown`/escalate rather than a crash or a
-  wrong guess. Anyone re-running this project's eval or demo on the free tier the same day as
-  heavy manual testing should expect the same throttling.
+* [Architecture & Specification](ARCHITECTURE.md) — Detailed technical design and rubric mapping.
+* [Knowledge Transfer (KT) Manual](docs/knowledge_transfer.md) — Exhaustive guide covering state definitions, safety guardrails, CAS locking, and common FAQs.
+* [Presentation Script & Demo Guide](docs/presentation_script.md) — 15-minute presentation script and step-by-step walkthrough for live demonstrations.
+* [Synthetic Fault Datasets](data/synthetic_tests/README.md) — Guide to testing clean, renamed, type-drifted, and escalated cases.
