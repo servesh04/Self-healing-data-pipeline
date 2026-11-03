@@ -147,6 +147,42 @@ def contract_from_snapshot(spec: dict, name: str = "default", version: str | Non
     )
 
 
+# ── Uploaded-contract overlay ───────────────────────────────────────────────
+# File contracts under config/contracts/ remain the immutable, authoritative
+# registry: they are read from disk and an upload can never take their name
+# (services.contract_store rejects a colliding registration). Contracts the
+# user registers through the app live in Postgres and are materialised here
+# once per process by contract_store.load_into_registry(). Keeping the overlay
+# module-level is what lets every existing caller -- routers/runs.py,
+# routers/config.py, services/store.py, contract_for_state -- resolve an
+# uploaded name without changing any of their signatures.
+#
+# Deliberately a plain dict, replaced wholesale rather than mutated row by row:
+# a partially-loaded registry would let a run start against a contract that
+# does not exist in the database.
+_uploaded: dict[str, Contract] = {}
+
+
+def set_uploaded_contracts(contracts: dict[str, Contract]) -> None:
+    """Atomically replace the uploaded-contract overlay, validating every entry."""
+    global _uploaded
+    checked: dict[str, Contract] = {}
+    for name, contract in contracts.items():
+        if not _NAME.fullmatch(name) or contract.name != name:
+            raise ValueError(f"invalid uploaded contract name: {name}")
+        checked[name] = contract
+    _uploaded = checked
+
+
+def clear_uploaded_contracts() -> None:
+    global _uploaded
+    _uploaded = {}
+
+
+def uploaded_contracts() -> dict[str, Contract]:
+    return dict(_uploaded)
+
+
 class ContractRegistry:
     def __init__(self, directory: Path = CONTRACTS_DIR):
         self.directory = Path(directory)
@@ -162,12 +198,14 @@ class ContractRegistry:
             load_contract(path, name)
 
     def names(self) -> list[str]:
-        return sorted(self._paths)
+        return sorted(set(self._paths) | set(_uploaded))
 
     def get(self, name: str) -> Contract:
-        if name not in self._paths:
-            raise ValueError(f"unknown contract: {name}")
-        return load_contract(self._paths[name], name)
+        if name in self._paths:
+            return load_contract(self._paths[name], name)
+        if name in _uploaded:
+            return _uploaded[name]
+        raise ValueError(f"unknown contract: {name}")
 
 
 def get_registry() -> ContractRegistry:
