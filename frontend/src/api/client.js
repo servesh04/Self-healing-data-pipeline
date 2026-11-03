@@ -69,12 +69,12 @@ export async function probeAuthRejection() {
 }
 
 // ── Phase 5: runs + config ───────────────────────────────────────────────
-export const listRuns = ({ limit, status, dataset, contractName = 'default' } = {}) => {
+export const listRuns = ({ limit, status, dataset, contractName } = {}) => {
   const params = new URLSearchParams()
   if (limit) params.set('limit', limit)
   if (status) params.set('status', status)
   if (dataset) params.set('dataset', dataset)
-  params.set('contract_name', contractName)
+  if (contractName && contractName !== 'all') params.set('contract_name', contractName)
   const qs = params.toString()
   return request(`/api/runs${qs ? `?${qs}` : ''}`)
 }

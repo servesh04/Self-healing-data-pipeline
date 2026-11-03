@@ -15,7 +15,16 @@ const FILTER_CHIPS = [
 // DASHBOARD.md — prioritised over every chart. Reused as-is for the
 // Overview page's "recent runs" panel (no filter chips, small limit) and
 // the standalone Runs page (filter chips, full list).
-export default function RunsTable({ runs, loading, showFilters = false, filter, onFilterChange }) {
+export default function RunsTable({
+  runs,
+  loading,
+  showFilters = false,
+  filter,
+  onFilterChange,
+  contracts = [],
+  contractFilter = 'all',
+  onContractFilterChange,
+}) {
   const selectRun = useRunStore((s) => s.selectRun)
 
   return (
@@ -28,20 +37,40 @@ export default function RunsTable({ runs, loading, showFilters = false, filter, 
       </div>
 
       {showFilters && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {FILTER_CHIPS.map(([value, label]) => (
-            <button
-              key={label}
-              onClick={() => onFilterChange?.(value)}
-              className={`rounded-full border px-2.5 py-0.5 text-[11px] ${
-                filter === value
-                  ? 'border-signal-dim bg-signal/15 text-signal'
-                  : 'border-line-strong text-ink-muted hover:text-ink'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            {FILTER_CHIPS.map(([value, label]) => (
+              <button
+                key={label}
+                onClick={() => onFilterChange?.(value)}
+                className={`rounded-full border px-2.5 py-0.5 text-[11px] ${
+                  filter === value
+                    ? 'border-signal-dim bg-signal/15 text-signal'
+                    : 'border-line-strong text-ink-muted hover:text-ink'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {contracts && contracts.length > 0 && (
+            <div className="flex items-center gap-1.5 text-xs text-ink-muted">
+              <span className="font-mono text-[10px] uppercase text-ink-faint">Contract:</span>
+              <select
+                aria-label="Filter by contract"
+                value={contractFilter ?? 'all'}
+                onChange={(e) => onContractFilterChange?.(e.target.value)}
+                className="rounded border border-line-strong bg-surface-raised px-2 py-0.5 text-[11px] text-ink focus:border-signal-dim focus:outline-none"
+              >
+                <option value="all">All contracts</option>
+                {contracts.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       )}
 
@@ -53,6 +82,7 @@ export default function RunsTable({ runs, loading, showFilters = false, filter, 
             <thead>
               <tr className="text-[11px] uppercase text-ink-faint">
                 <th className="py-1.5 pr-3 text-left font-normal">status</th>
+                <th className="py-1.5 pr-3 text-left font-normal">contract</th>
                 <th className="py-1.5 pr-3 text-left font-normal">dataset</th>
                 <th className="py-1.5 pr-3 text-left font-normal">drift</th>
                 <th className="py-1.5 pr-3 text-right font-normal">attempts</th>
@@ -74,6 +104,11 @@ export default function RunsTable({ runs, loading, showFilters = false, filter, 
                     <td className="pr-3">
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] ${chip.className}`}>
                         {chip.label}
+                      </span>
+                    </td>
+                    <td className="pr-3">
+                      <span className="rounded border border-line-strong px-1.5 py-0.5 text-[10px] text-ink-muted">
+                        {r.contract_name || 'default'}
                       </span>
                     </td>
                     <td className="pr-3 text-ink">{r.dataset ?? r.source_path?.split(/[\\/]/).pop()}</td>

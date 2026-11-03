@@ -1,0 +1,9 @@
+# Invalid Contract for Negative Testing
+columns:
+  order_id:
+    dtype: not_a_real_type
+    nullable: false
+  amount:
+    dtype: float64
+    min: "not_a_number"
+row_count_min: -5

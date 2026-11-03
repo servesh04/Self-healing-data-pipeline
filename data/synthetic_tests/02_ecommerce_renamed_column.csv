@@ -1,0 +1,9 @@
+order_id,customer_id,category,total_amount,status
+1001,501,Electronics,299.99,completed
+1002,502,Apparel,49.50,completed
+1003,503,Home,120.00,pending
+1004,504,Books,15.99,completed
+1005,505,Electronics,899.00,pending
+1006,506,Apparel,75.25,completed
+1007,507,Home,210.50,refunded
+1008,508,Books,32.00,completed

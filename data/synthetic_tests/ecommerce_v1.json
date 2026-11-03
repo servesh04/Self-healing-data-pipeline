@@ -1,0 +1,29 @@
+{
+  "columns": {
+    "order_id": {
+      "dtype": "int64",
+      "nullable": false,
+      "unique": true
+    },
+    "customer_id": {
+      "dtype": "int64",
+      "nullable": false
+    },
+    "category": {
+      "dtype": "str",
+      "nullable": false,
+      "allowed": ["Electronics", "Apparel", "Home", "Books"]
+    },
+    "amount": {
+      "dtype": "float64",
+      "nullable": false,
+      "min": 0
+    },
+    "status": {
+      "dtype": "str",
+      "nullable": false,
+      "allowed": ["pending", "completed", "refunded"]
+    }
+  },
+  "row_count_min": 5
+}

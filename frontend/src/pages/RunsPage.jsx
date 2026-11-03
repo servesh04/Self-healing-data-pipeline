@@ -8,9 +8,12 @@ export default function RunsPage() {
   const runsError = useRunStore((s) => s.runsError)
   const runsFilter = useRunStore((s) => s.runsFilter)
   const fetchRuns = useRunStore((s) => s.fetchRuns)
+  const contracts = useRunStore((s) => s.contracts)
+  const fetchContracts = useRunStore((s) => s.fetchContracts)
 
   useEffect(() => {
     fetchRuns()
+    fetchContracts()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -23,6 +26,9 @@ export default function RunsPage() {
       showFilters
       filter={runsFilter.status}
       onFilterChange={(status) => fetchRuns({ ...runsFilter, status })}
+      contracts={contracts}
+      contractFilter={runsFilter.contractName ?? 'all'}
+      onContractFilterChange={(contractName) => fetchRuns({ ...runsFilter, contractName })}
     />
   )
 }

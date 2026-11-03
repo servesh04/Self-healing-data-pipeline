@@ -294,7 +294,7 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=500),
     status: str | None = Query(None, description="filter: clean/healed/escalated/awaiting_approval/running"),
     dataset: str | None = Query(None, description="filter: dataset filename, e.g. day4_combo.csv"),
-    contract_name: str = Query("default"),
+    contract_name: str | None = Query(None, description="filter: specific contract name, or omit/'all' for all contracts"),
 ) -> dict:
     """Enumerates run_records (the lightweight index, not the checkpointer)
     via collect_run_summaries — the same checkpointer-backed aggregation the
@@ -308,11 +308,13 @@ async def list_runs(
     dataset are both derived fields (status can reflect a live interrupt;
     dataset is the source_path's basename), not raw columns to filter on.
     """
-    try:
-        get_registry().get(contract_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    runs = await collect_run_summaries(graph_app, contract_name=contract_name)
+    effective_contract = None if (not contract_name or contract_name.lower() in ("all", "none")) else contract_name
+    if effective_contract is not None:
+        try:
+            get_registry().get(effective_contract)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    runs = await collect_run_summaries(graph_app, contract_name=effective_contract)
     if status:
         runs = [r for r in runs if r["status"] == status]
     if dataset:

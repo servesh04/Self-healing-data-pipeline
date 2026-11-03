@@ -78,10 +78,11 @@ _generation: dict[tuple[str | None, str | None], int] = {}
 
 def invalidate_run_summaries(pipeline_env: str | None, contract_name: str = "default") -> None:
     """Drop one scope's summary, including an aggregation already in flight."""
-    key = (pipeline_env if pipeline_env is not None else get_settings().pipeline_env, contract_name)
-    _generation[key] = _generation.get(key, 0) + 1
-    _cache.pop(key, None)
-    _pending.pop(key, None)
+    env = pipeline_env if pipeline_env is not None else get_settings().pipeline_env
+    for k in [(env, contract_name), (env, None)]:
+        _generation[k] = _generation.get(k, 0) + 1
+        _cache.pop(k, None)
+        _pending.pop(k, None)
 
 
 async def warm_cache(graph_app, pipeline_env: str | None = None, contract_name: str | None = "default") -> None:

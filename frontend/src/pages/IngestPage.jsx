@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import DatasetPreview from '../components/Ingest/DatasetPreview'
 import * as ingestApi from '../api/ingestion'
+import { useRunStore } from '../store/useRunStore'
 
 // Mirrors services/upload_store.py caps for instant feedback; the server is
 // the only enforcement point (413/422) — these only stop obvious mistakes
@@ -73,7 +74,10 @@ export default function IngestPage() {
       .getContracts()
       .then(({ contracts }) => {
         setContracts(contracts ?? [])
-        if (contracts?.length && !contracts.some((c) => c.name === 'default')) {
+        const globalContract = useRunStore.getState().contractName
+        if (contracts?.some((c) => c.name === globalContract)) {
+          setContractName(globalContract)
+        } else if (contracts?.length && !contracts.some((c) => c.name === 'default')) {
           setContractName(contracts[0].name)
         }
       })
@@ -151,6 +155,7 @@ export default function IngestPage() {
     try {
       const { run_id } = await ingestApi.triggerRun(`upload_${dataset.dataset_id}`, contractName)
       if (!run_id) throw new Error('run did not start')
+      useRunStore.getState().setContractName(contractName)
       // The existing Run Detail view owns everything from here.
       navigate(`/runs/${encodeURIComponent(run_id)}`)
     } catch (err) {

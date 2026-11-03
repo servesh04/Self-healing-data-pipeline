@@ -51,7 +51,7 @@ export const useRunStore = create((set, get) => ({
   runs: [],
   runsLoading: false,
   runsError: null,
-  runsFilter: { status: null, dataset: null },
+  runsFilter: { status: null, dataset: null, contractName: 'all' },
 
   overviewRuns: [],
   overviewRunsLoading: false,
@@ -94,11 +94,16 @@ export const useRunStore = create((set, get) => ({
 
   async fetchRuns(filterOverride) {
     const filter = filterOverride ?? get().runsFilter
-    const contractName = get().contractName
+    const contractName = filter.contractName !== undefined ? filter.contractName : 'all'
     const revision = get().scopeRevision
     set({ runsLoading: true, runsError: null, runsFilter: filter })
     try {
-      const { runs } = await api.listRuns({ limit: 200, status: filter.status, dataset: filter.dataset, contractName })
+      const { runs } = await api.listRuns({
+        limit: 200,
+        status: filter.status,
+        dataset: filter.dataset,
+        contractName: (contractName && contractName !== 'all') ? contractName : undefined,
+      })
       if (get().scopeRevision === revision) set({ runs, runsLoading: false })
     } catch (err) {
       if (get().scopeRevision === revision) set({ runsError: err.message, runsLoading: false })
