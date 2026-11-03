@@ -13,7 +13,7 @@ import psycopg
 from psycopg import sql
 import yaml
 
-from services import store
+from services import store, upload_store
 
 ROOT = Path(__file__).resolve().parents[2]
 CSV_DIR = ROOT / "data" / "sources"
@@ -44,6 +44,62 @@ def _family(source_id: str) -> str | None:
 def _database_specs() -> dict:
     raw = yaml.safe_load(SOURCE_CONFIG.read_text(encoding="utf-8")) or {}
     return raw.get("database_tables") or {}
+
+
+# App-expansion uploads (services/app_datasets table) are addressed as
+# source_id = "upload_<dataset_id>". The underscore-delimited prefix keeps the
+# ID a single Path-safe token (no scheme/colon to confuse filename checks) and
+# cannot collide with the YAML catalog, bundled CSV filenames, or database
+# table names.
+UPLOAD_PREFIX = "upload_"
+
+
+def _parse_upload_id(source_id: str) -> str:
+    dataset_id = source_id[len(UPLOAD_PREFIX):]
+    try:
+        upload_store.parse_dataset_id(dataset_id)
+    except upload_store.IngestionError as exc:
+        # Malformed remainder is never a filesystem lookup — fail closed.
+        raise ValueError("invalid uploaded dataset ID") from exc
+    return dataset_id
+
+
+async def _upload_source(source_id: str, contract_name: str, run_id: str) -> MaterializedSource:
+    """Materialize a user-uploaded dataset through the existing snapshot flow.
+
+    Contract binding is deliberately minimal: the trigger endpoint
+    (POST /api/runs) has already validated `contract_name` against the
+    registry, and this records that exact choice on the run. Column-level
+    strictness is NOT enforced here on purpose — missing columns and wrong
+    types are precisely the drift classes the pipeline diagnoses and heals,
+    and rejecting them at materialization would disable the feature. The
+    bytes are re-digest-checked on load, so what enters ``save_source_snapshot``
+    is exactly what the user uploaded, foreign to anything on disk.
+    """
+    dataset_id = _parse_upload_id(source_id)
+    row = await upload_store.get_dataset(dataset_id)
+    if row is None:
+        raise ValueError("uploaded dataset not found")
+    try:
+        payload = await upload_store.get_bytes(dataset_id)  # digest re-verified against the row
+    except upload_store.IngestionError as exc:
+        # Deleted or corrupted since the upload; POST /api/runs maps ValueError -> 422.
+        raise ValueError(f"uploaded dataset unavailable: {exc.detail}") from exc
+    digest = hashlib.sha256(payload).hexdigest()
+    if digest != row["sha256"]:
+        raise ValueError("uploaded dataset digest mismatch")
+    await store.save_source_snapshot(run_id, source_id, payload, digest,
+                                     row["row_count"], min(row["row_count"], PROFILE_LIMIT))
+    SNAPSHOT_DIR.mkdir(exist_ok=True)
+    path = SNAPSHOT_DIR / f"{run_id}.csv"
+    path.write_bytes(payload)
+    ref = {"kind": "upload", "source_id": source_id, "dataset_id": dataset_id,
+           "filename": row["filename"], "sha256": digest,
+           "row_count": row["row_count"], "profile_rows": min(row["row_count"], PROFILE_LIMIT)}
+    # family=None is the existing precedent for sources without a curated
+    # (contract, family) baseline — no distribution/temporal rule applies
+    # beyond the contract's own checks.
+    return MaterializedSource(source_id, str(path), None, ref, digest)
 
 
 def _json_specs() -> dict:
@@ -161,6 +217,8 @@ def _csv_source(source_id: str, contract_name: str) -> MaterializedSource:
 async def materialize_source(source_id: str, contract_name: str, run_id: str) -> MaterializedSource:
     if not isinstance(source_id, str) or not source_id or Path(source_id).name != source_id or any(c in source_id for c in ("/", "\\", "\0")):
         raise ValueError("unknown source ID")
+    if source_id.startswith(UPLOAD_PREFIX):
+        return await _upload_source(source_id, contract_name, run_id)
     if source_id in _json_specs():
         return await _json_source(source_id, _json_specs()[source_id], contract_name, run_id)
     if source_id not in _database_specs():
@@ -236,7 +294,7 @@ class SourceUnavailable(RuntimeError):
 async def ensure_source_path(state: dict) -> str:
     ref = state.get("source_ref") or {}
     path = Path(state["source_path"])
-    if ref.get("kind") not in {"database_table", "local_json", "external_batch"}:
+    if ref.get("kind") not in {"database_table", "local_json", "external_batch", "upload"}:
         return str(path)
     expected = ref["sha256"]
     if not path.is_file():
