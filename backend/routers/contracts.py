@@ -16,13 +16,21 @@ import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from auth import require_token
+from config import get_settings
 from pipeline.contract import Contract, contract_from_snapshot, get_registry
 from services import contract_store
 
 log = logging.getLogger(__name__)
 
 _schema_ready = False
-_schema_lock = asyncio.Lock()
+_schema_lock: asyncio.Lock | None = None
+
+
+def _get_schema_lock() -> asyncio.Lock:
+    global _schema_lock
+    if _schema_lock is None:
+        _schema_lock = asyncio.Lock()
+    return _schema_lock
 
 
 async def _ensure_ready() -> None:
@@ -30,16 +38,17 @@ async def _ensure_ready() -> None:
 
     Startup in main.py should already have done this; repeating it lazily is
     what keeps a cold Neon compute (or a missed startup hook) from turning
-    every contract request into a 500. Idempotent and cheap once the tables
-    exist -- the same pattern routers/runs.py uses for its schema retry.
+    every contract request into a 500. In production, runtime credentials lack
+    DDL permissions, so schema migrations must be applied ahead of time.
     """
     global _schema_ready
     if _schema_ready:
         return
     try:
-        async with _schema_lock:
+        async with _get_schema_lock():
             if not _schema_ready:
-                await contract_store.ensure_schema()
+                if get_settings().auth_mode != "production":
+                    await contract_store.ensure_schema()
                 await contract_store.load_into_registry()
                 _schema_ready = True
     except Exception:
