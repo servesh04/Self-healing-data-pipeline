@@ -13,10 +13,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import db
+from config import get_settings
 
 
 async def migrate() -> None:
-    dsn = os.environ.get("APP_DATASETS_MIGRATION_DATABASE_URL") or os.environ.get("APP_CONTRACTS_MIGRATION_DATABASE_URL") or os.environ["P5_MIGRATION_DATABASE_URL"]
+    dsn = (
+        os.environ.get("APP_DATASETS_MIGRATION_DATABASE_URL")
+        or os.environ.get("APP_CONTRACTS_MIGRATION_DATABASE_URL")
+        or os.environ.get("P5_MIGRATION_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+    )
+    if not dsn:
+        try:
+            dsn = get_settings().database_url
+        except Exception as exc:
+            raise RuntimeError(
+                "No database URL found: specify APP_DATASETS_MIGRATION_DATABASE_URL, "
+                "APP_CONTRACTS_MIGRATION_DATABASE_URL, P5_MIGRATION_DATABASE_URL, or DATABASE_URL in .env"
+            ) from exc
     await db.open_pool(dsn)
     try:
         async with db.get_pool().connection() as conn:
