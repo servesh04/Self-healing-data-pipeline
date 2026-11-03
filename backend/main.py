@@ -25,9 +25,9 @@ import db
 from auth import require_token
 from config import Settings, get_settings
 from graph.build import build_graph
-from routers import analytics, chat, config, runs, external
+from routers import analytics, chat, config, contracts, datasets, runs, external
 from services import analytics as analytics_service
-from services import checkpointer, store, external_store
+from services import checkpointer, contract_store, external_store, store, upload_store
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +77,9 @@ async def lifespan(app: FastAPI):
             await store.init_component_tables()
             await external_store.init_external_tables()
             await checkpointer.setup_checkpointer()
+            await contract_store.ensure_schema()
+            await upload_store.ensure_schema()
+        await contract_store.load_into_registry()
     except Exception:
         # A cold Neon compute can miss the first statement. Do not crash the
         # app: /health must stay green so the platform does not kill the
@@ -129,6 +132,8 @@ app.add_middleware(
 app.include_router(runs.router)
 app.include_router(external.router)
 app.include_router(config.router)
+app.include_router(contracts.router)
+app.include_router(datasets.router)
 app.include_router(analytics.router)
 app.include_router(chat.router)
 

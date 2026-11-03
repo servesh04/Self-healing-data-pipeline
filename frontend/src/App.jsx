@@ -5,10 +5,8 @@ import { useAuthStore } from './store/useAuthStore'
 import { useRunStore } from './store/useRunStore'
 import AppShell from './components/Shell/AppShell'
 import RequireAuth from './components/Shell/RequireAuth'
-import {
-  ContractsPlaceholder as ContractsPage,
-  IngestPlaceholder as IngestPage,
-} from './components/Shell/Placeholders'
+import ContractsPage from './pages/ContractsPage'
+import IngestPage from './pages/IngestPage'
 import Overview from './pages/Overview'
 import RunsPage from './pages/RunsPage'
 import RunDetail from './pages/RunDetail'
@@ -38,13 +36,7 @@ function SessionExpiryWatcher() {
 }
 
 /**
- * Route table.
- *
- * Integration swap points (one line each): replace the two alias imports above
- * with the real page modules. The <Route> entries stay exactly as they are.
- *
- *   import IngestPage from './pages/IngestPage'
- *   import ContractsPage from './pages/ContractsPage'
+ * Integrated Route table.
  */
 export default function App() {
   return (
