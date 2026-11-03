@@ -1,18 +1,32 @@
 /**
  * Minimal API client.
  *
- * Every /api/* route requires `Authorization: Bearer <token>`. The token comes
- * from VITE_SHARED_TOKEN, which Vite inlines at build time.
+ * Every /api/* route requires `Authorization: Bearer <token>`. The token is
+ * read from the prototype session (`shdp.session`) first and falls back to
+ * VITE_SHARED_TOKEN, which Vite inlines at build time. The demo session stores
+ * that same shared token, so swapping the source does not change the API
+ * contract.
  */
+
+import {
+  SESSION_EXPIRED_EVENT,
+  clearSession,
+  readSession,
+} from '../lib/session'
 
 const BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 const TOKEN = import.meta.env.VITE_SHARED_TOKEN ?? ''
 
 export const apiBase = BASE
 
-async function request(path, { auth = true, ...opts } = {}) {
+function resolveToken() {
+  return readSession()?.token || TOKEN
+}
+
+export async function request(path, { auth = true, ...opts } = {}) {
   const headers = { Accept: 'application/json', ...(opts.headers ?? {}) }
-  if (auth) headers.Authorization = `Bearer ${TOKEN}`
+  const token = auth ? resolveToken() : ''
+  if (token) headers.Authorization = `Bearer ${token}`
 
   const res = await fetch(`${BASE}${path}`, { ...opts, headers })
   const text = await res.text()
@@ -25,6 +39,14 @@ async function request(path, { auth = true, ...opts } = {}) {
   }
 
   if (!res.ok) {
+    // A 401 against a signed-in session means the shared token is no longer
+    // accepted. Drop the prototype session and let the shell return to /login
+    // rather than leaving the user on a page that can never load.
+    if (res.status === 401 && auth && readSession()) {
+      clearSession()
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT))
+    }
+
     const err = new Error(body?.detail ?? `HTTP ${res.status}`)
     err.status = res.status
     err.body = body

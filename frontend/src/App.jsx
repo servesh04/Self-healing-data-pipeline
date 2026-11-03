@@ -1,31 +1,71 @@
+import { useEffect } from 'react'
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { SESSION_EXPIRED_EVENT } from './lib/session'
+import { useAuthStore } from './store/useAuthStore'
 import { useRunStore } from './store/useRunStore'
-import TopBar from './components/Shell/TopBar'
-import NavTabs from './components/Shell/NavTabs'
-import NewRunModal from './components/Shell/NewRunModal'
+import AppShell from './components/Shell/AppShell'
+import RequireAuth from './components/Shell/RequireAuth'
+import {
+  ContractsPlaceholder as ContractsPage,
+  IngestPlaceholder as IngestPage,
+} from './components/Shell/Placeholders'
 import Overview from './pages/Overview'
 import RunsPage from './pages/RunsPage'
-import MappingPage from './pages/MappingPage'
 import RunDetail from './pages/RunDetail'
+import MappingPage from './pages/MappingPage'
+import LoginPage from './pages/LoginPage'
+import WorkspacePage from './pages/WorkspacePage'
 
-const PAGES = {
-  overview: Overview,
-  runs: RunsPage,
-  mapping: MappingPage,
+/**
+ * When the API rejects the session token, the client clears the prototype
+ * session and emits this event. Return to the login screen once, rather than
+ * leaving a protected page in a permanent error state.
+ */
+function SessionExpiryWatcher() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const onExpired = () => {
+      useRunStore.getState().clearSelection()
+      useAuthStore.getState().signOut()
+      navigate('/login', { replace: true })
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
+  }, [navigate])
+
+  return null
 }
 
+/**
+ * Route table.
+ *
+ * Integration swap points (one line each): replace the two alias imports above
+ * with the real page modules. The <Route> entries stay exactly as they are.
+ *
+ *   import IngestPage from './pages/IngestPage'
+ *   import ContractsPage from './pages/ContractsPage'
+ */
 export default function App() {
-  const selectedRunId = useRunStore((s) => s.selectedRunId)
-  const currentPage = useRunStore((s) => s.currentPage)
-  const Page = PAGES[currentPage] ?? Overview
-
   return (
-    <div className="min-h-screen bg-canvas font-mono text-ink">
-      <TopBar />
-      <NavTabs />
-      <div className="mx-auto max-w-[1600px] px-8 py-6">
-        {selectedRunId ? <RunDetail /> : <Page />}
-      </div>
-      <NewRunModal />
-    </div>
+    <>
+      <SessionExpiryWatcher />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+
+        <Route element={<RequireAuth />}>
+          <Route element={<AppShell />}>
+            <Route index element={<Overview />} />
+            <Route path="ingestion" element={<IngestPage />} />
+            <Route path="contracts" element={<ContractsPage />} />
+            <Route path="runs" element={<RunsPage />} />
+            <Route path="runs/:runId" element={<RunDetail />} />
+            <Route path="mapping" element={<MappingPage />} />
+            <Route path="workspace" element={<WorkspacePage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Route>
+      </Routes>
+    </>
   )
 }

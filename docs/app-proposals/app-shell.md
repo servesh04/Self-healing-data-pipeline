@@ -116,6 +116,8 @@ The `<Route element={<IngestPage />}>` entries do **not** change.
 
 Guard against loops: URL→store runs only on pathname change; store→URL runs only when `selectedRunId` changes.
 
+Every sign-out path (sidebar, top bar, workspace, and the API-401 handler) calls the existing `useRunStore.getState().clearSelection()` first, so the 2-second run poll stops instead of continuing behind the login screen.
+
 ---
 
 ## 6. Component / file plan
@@ -124,6 +126,7 @@ Guard against loops: URL→store runs only on pathname change; store→URL runs 
 
 | File | Purpose |
 |---|---|
+| `frontend/src/lib/session.js` | Storage key, demo account/user constants, read/write/clear, token mask (shared by store + client) |
 | `frontend/src/store/useAuthStore.js` | Demo session, login/logout, localStorage persistence, profile-name update |
 | `frontend/src/pages/LoginPage.jsx` | Split-panel login, demo-credential card, prototype warning |
 | `frontend/src/pages/WorkspacePage.jsx` | Profile + workspace details, session/API status, display-name edit, logout |
@@ -132,6 +135,7 @@ Guard against loops: URL→store runs only on pathname change; store→URL runs 
 | `frontend/src/components/Shell/RequireAuth.jsx` | Route guard + `from` state for post-login return |
 | `frontend/src/components/Shell/RunRouteSync.jsx` | URL ↔ `useRunStore` bridge described in §5 |
 | `frontend/src/components/Shell/Placeholders.jsx` | `IngestPlaceholder` / `ContractsPlaceholder` |
+| `frontend/src/components/Shell/icons.jsx` | Inline stroke icons used by the shell |
 | `docs/app-proposals/app-shell.md` | This document |
 
 ### Modified
