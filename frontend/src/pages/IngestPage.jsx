@@ -68,8 +68,7 @@ export default function IngestPage() {
     }
   }, [])
 
-  useEffect(() => {
-    refreshRecent()
+  const refreshContracts = useCallback(() => {
     ingestApi
       .getContracts()
       .then(({ contracts }) => {
@@ -79,7 +78,14 @@ export default function IngestPage() {
         }
       })
       .catch((err) => setContractsError(err.message))
-  }, [refreshRecent])
+  }, [])
+
+  useEffect(() => {
+    refreshRecent()
+    refreshContracts()
+    window.addEventListener('shdp:contracts-updated', refreshContracts)
+    return () => window.removeEventListener('shdp:contracts-updated', refreshContracts)
+  }, [refreshRecent, refreshContracts])
 
   const loadPreview = useCallback(async (record) => {
     setDataset(record)

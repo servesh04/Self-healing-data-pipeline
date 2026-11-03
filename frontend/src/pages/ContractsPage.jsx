@@ -90,6 +90,7 @@ export default function ContractsPage() {
   async function handleRegistered(contract) {
     setUploadOpen(false)
     await refreshList(contract?.name)
+    window.dispatchEvent(new CustomEvent('shdp:contracts-updated'))
   }
 
   async function handleDelete(name) {
@@ -98,6 +99,7 @@ export default function ContractsPage() {
     try {
       await deleteContract(name)
       await refreshList(null)
+      window.dispatchEvent(new CustomEvent('shdp:contracts-updated'))
     } catch (err) {
       setDeleteError(err.message)
     } finally {

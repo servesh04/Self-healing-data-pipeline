@@ -7,7 +7,8 @@ REVOKE ALL ON TABLE mapping_state, mapping_current, run_records, source_snapshot
   component_events, component_labels, approval_decisions,
   external_order_batches, external_order_releases,
   published_order_batches, published_orders,
-  checkpoints, checkpoint_blobs, checkpoint_writes, checkpoint_migrations
+  checkpoints, checkpoint_blobs, checkpoint_writes, checkpoint_migrations,
+  app_contracts, app_contract_versions, app_datasets
   FROM p5_api, p5_loader;
 
 GRANT SELECT, INSERT, UPDATE ON TABLE mapping_state, mapping_current, run_records,
@@ -17,6 +18,7 @@ GRANT SELECT ON TABLE checkpoint_migrations TO p5_api;
 GRANT SELECT ON TABLE external_order_batches TO p5_api;
 GRANT UPDATE (agent_run_id, dispatch_lease_until) ON TABLE external_order_batches TO p5_api;
 GRANT SELECT, INSERT ON TABLE external_order_releases TO p5_api;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE app_contracts, app_contract_versions, app_datasets TO p5_api;
 -- API cannot publish destination rows.
 
 GRANT SELECT, INSERT ON TABLE external_order_batches TO p5_loader;
