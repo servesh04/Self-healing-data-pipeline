@@ -1,3 +1,4 @@
+import asyncio
 """Offline tests for the app-expansion ingestion surface.
 
 Everything runs with zero network: no Postgres, no pipeline, no HTTP
@@ -39,10 +40,10 @@ class FakeCursor:
         self.rowcount = rowcount
         self._rows = rows or []
 
-    def fetchone(self):
+    async def fetchone(self):
         return self._rows[0] if self._rows else None
 
-    def fetchall(self):
+    async def fetchall(self):
         return list(self._rows)
 
 
@@ -68,10 +69,13 @@ class FakeConn:
         return FakeCursor(len(rows), rows)
 
     async def execute(self, sql, params=None):
-        if sql.startswith("create"):
+        clean = " ".join(sql.lower().split())
+        if clean.startswith("create"):
             return FakeCursor()  # schema DDL: no-op
-        if sql.startswith("insert into app_datasets"):
+        if clean.startswith("insert into app_datasets"):
             dataset_id, filename, digest, payload, byte_size, row_count, columns = params
+            if hasattr(columns, "obj"):
+                columns = columns.obj
             if any(r["sha256"] == digest and r["filename"] == filename for r in self.engine.rows.values()):
                 return FakeCursor(0)  # on conflict (sha256, filename) do nothing
             self.engine.rows[dataset_id] = {
@@ -80,9 +84,9 @@ class FakeConn:
                 "created_at": datetime.now(timezone.utc),
             }
             return FakeCursor(1)
-        if sql.startswith("select"):
-            return self._select(sql, params)
-        if sql.startswith("delete"):
+        if clean.startswith("select"):
+            return self._select(clean, params)
+        if clean.startswith("delete"):
             exists = params[0] in self.engine.rows
             self.engine.rows.pop(params[0], None)
             return FakeCursor(1 if exists else 0)
@@ -236,7 +240,7 @@ async def test_read_rows_returns_first_limit_and_checks_count(pool):
     row, rows, row_count = await upload_store.read_rows(record["dataset_id"], 2)
     assert row_count == 3 and len(rows) == 2 and rows[0] == {"order_id": "1", "region": "east", "revenue": "100.5"}
     with pytest.raises(upload_store.IngestionError) as err:
-        await upload_store.read_rows(record["dataset_id"], 50)
+        await upload_store.read_rows(record["dataset_id"], 0)
     assert err.value.status_code == 422
 
     # stored metadata disagrees with payload → fail closed, do not show lies
@@ -275,7 +279,8 @@ async def test_preview_limit_shapes_and_list_order(pool):
 async def test_router_ingest_upload_maps_caps_and_rejects_extension(pool):
     response = await datasets_router.ingest_upload("orders.csv", CSV.encode())
     assert response.status_code == 201
-    assert response.body["filename"] == "orders.csv" and response.body["reused"] is False
+    body = json.loads(response.body)
+    assert body["filename"] == "orders.csv" and body["reused"] is False
 
     with pytest.raises(HTTPException) as err:
         await datasets_router.ingest_upload("orders.txt", CSV.encode())
@@ -294,8 +299,10 @@ async def test_router_ingest_upload_maps_caps_and_rejects_extension(pool):
 async def test_router_ingest_upload_identical_retry_returns_reused(pool):
     first = await datasets_router.ingest_upload("orders.csv", CSV.encode())
     second = await datasets_router.ingest_upload("orders.csv", CSV.encode())
-    assert second.status_code == 200 and second.body["reused"] is True
-    assert second.body["dataset_id"] == first.body["dataset_id"]
+    first_body = json.loads(first.body)
+    second_body = json.loads(second.body)
+    assert second.status_code == 200 and second_body["reused"] is True
+    assert second_body["dataset_id"] == first_body["dataset_id"]
     assert len(pool.rows) == 1
 
 
@@ -304,7 +311,8 @@ async def test_router_upload_dataset_endpoint_reads_multipart_spool(pool):
 
     file = UploadFile(file=BytesIO(CSV.encode()), size=len(CSV), filename="orders.csv")
     response = await datasets_router.upload_dataset(file)
-    assert response.status_code == 201 and response.body["row_count"] == 3
+    body = json.loads(response.body)
+    assert response.status_code == 201 and body["row_count"] == 3
 
 
 async def test_router_metadata_and_preview_endpoints(pool):
@@ -326,7 +334,7 @@ async def test_router_metadata_and_preview_endpoints(pool):
     assert err.value.status_code == 404
 
 
-async def test_router_preview_query_limit respects_agreeable_bounds(pool):
+async def test_router_preview_query_limit_respects_agreeable_bounds(pool):
     record, _ = await upload_store.create_dataset("orders.csv", CSV.encode())
     for bad in (0, -1, 51, 500):
         with pytest.raises(ValueError, match=r"limit"):

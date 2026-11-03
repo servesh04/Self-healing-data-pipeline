@@ -74,9 +74,17 @@ class IngestionError(Exception):
         super().__init__(detail)
 
 
-def _friendly_type(dtype: pd.api.types.pandas_dtype) -> str:
-    kind = str(dtype).split("[")[0]  # int64, float64, bool, datetime64, object, string
-    return _TYPE_NAMES.get(kind, "string")
+def _friendly_type(dtype: object) -> str:
+    kind = str(dtype).split("[")[0].lower()
+    if kind.startswith("int") or kind == "integer":
+        return "integer"
+    if kind.startswith("float"):
+        return "float"
+    if kind.startswith("bool"):
+        return "boolean"
+    if "date" in kind or "time" in kind:
+        return "datetime"
+    return "string"
 
 
 def _infer_columns(names: list[str], sample_rows: list[list[str]]) -> list[dict]:
@@ -118,6 +126,8 @@ def analyze_csv(payload: bytes) -> dict:
         text = payload.decode("utf-8-sig")  # BOM-tolerant UTF-8, same as the P6 staged batches
     except UnicodeError as exc:
         raise IngestionError("file is not valid UTF-8 CSV") from exc
+    if "\x00" in text:
+        raise IngestionError("file contains NUL bytes (malformed CSV)")
 
     reader = csv.reader(io.StringIO(text, newline=""), strict=True)
     try:
@@ -270,7 +280,7 @@ async def create_dataset(filename: str | None, payload: bytes) -> tuple[dict, bo
         row = await cur.fetchone()
     if row is None:
         raise IngestionError("dataset creation conflict", 409)
-    return record_shape(row), reused
+    return record_shape(row, reused=reused), reused
 
 
 async def get_dataset(dataset_id: str) -> dict | None:
@@ -295,7 +305,7 @@ async def get_bytes(dataset_id: str) -> bytes:
         raise IngestionError("uploaded dataset not found", 404)
     payload = bytes(row["payload"])
     if hashlib.sha256(payload).hexdigest() != row["sha256"]:
-        raise IngestionError("stored dataset fails its SHA-256 digest", 409)
+        raise IngestionError("stored dataset fails its SHA-256 digest (digest mismatch)", 409)
     return payload
 
 
@@ -306,6 +316,8 @@ async def read_rows(dataset_id: str, limit: int) -> tuple[dict, list[dict], int]
     the 5,000-row cap) so a corrupted row fails the preview instead of
     showing the pipeline data that disagrees with the dataset metadata.
     """
+    if limit < 1 or limit > PREVIEW_MAX_LIMIT:
+        raise IngestionError(f"preview limit must be between 1 and {PREVIEW_MAX_LIMIT}", 422)
     row = await get_dataset(dataset_id)
     if row is None:
         raise IngestionError("uploaded dataset not found", 404)

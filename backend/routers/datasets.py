@@ -109,6 +109,8 @@ async def preview_dataset(
     dataset_id: str,
     limit: int = Query(20, ge=1, le=upload_store.PREVIEW_MAX_LIMIT),
 ) -> dict:
+    if limit < 1 or limit > upload_store.PREVIEW_MAX_LIMIT:
+        raise ValueError(f"preview limit must be between 1 and {upload_store.PREVIEW_MAX_LIMIT}")
     try:
         record, rows, row_count = await upload_store.read_rows(dataset_id, limit)
     except IngestionError as exc:

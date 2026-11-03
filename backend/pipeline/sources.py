@@ -292,6 +292,7 @@ class SourceUnavailable(RuntimeError):
 
 
 async def ensure_source_path(state: dict) -> str:
+    """Ensure the source snapshot file exists on disk and its SHA-256 matches."""
     ref = state.get("source_ref") or {}
     path = Path(state["source_path"])
     if ref.get("kind") not in {"database_table", "local_json", "external_batch", "upload"}:
